@@ -47,6 +47,10 @@ pub const mailbox_attrs = struct {
     pub const junk = "\\Junk";
     pub const sent = "\\Sent";
     pub const trash = "\\Trash";
+    pub const important = "\\Important";
+    pub const memos = "\\Memos";
+    pub const scheduled = "\\Scheduled";
+    pub const snoozed = "\\Snoozed";
 };
 
 pub const UID = u32;

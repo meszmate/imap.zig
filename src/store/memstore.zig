@@ -203,6 +203,10 @@ pub const MemStore = struct {
         if (!std.mem.eql(u8, user.password, password)) return error.InvalidCredentials;
         return user;
     }
+
+    pub fn authenticateExternal(self: *MemStore, username: []const u8) !*User {
+        return self.users.get(username) orelse error.InvalidCredentials;
+    }
 };
 
 pub fn matchesPattern(name: []const u8, pattern: []const u8) bool {

@@ -20,6 +20,47 @@ pub const StatusResponse = struct {
     }
 };
 
+pub const codes = struct {
+    pub const alert = "ALERT";
+    pub const badcharset = "BADCHARSET";
+    pub const parse = "PARSE";
+    pub const permanentflags = "PERMANENTFLAGS";
+    pub const read_only = "READ-ONLY";
+    pub const read_write = "READ-WRITE";
+    pub const trycreate = "TRYCREATE";
+    pub const uidnext = "UIDNEXT";
+    pub const uidvalidity = "UIDVALIDITY";
+    pub const unseen = "UNSEEN";
+    pub const appenduid = "APPENDUID";
+    pub const copyuid = "COPYUID";
+    pub const uidnotsticky = "UIDNOTSTICKY";
+    pub const highestmodseq = "HIGHESTMODSEQ";
+    pub const nomodseq = "NOMODSEQ";
+    pub const modified = "MODIFIED";
+    pub const closed = "CLOSED";
+    pub const metadata = "METADATA";
+    pub const authenticationfailed = "AUTHENTICATIONFAILED";
+    pub const authorizationfailed = "AUTHORIZATIONFAILED";
+    pub const unavailable = "UNAVAILABLE";
+    pub const expired = "EXPIRED";
+    pub const overquota = "OVERQUOTA";
+    pub const alreadyexists = "ALREADYEXISTS";
+    pub const nonexistent = "NONEXISTENT";
+    pub const compressionactive = "COMPRESSIONACTIVE";
+    pub const badcomparator = "BADCOMPARATOR";
+    pub const toobig = "TOOBIG";
+    pub const notificationoverflow = "NOTIFICATIONOVERFLOW";
+    pub const contactadmin = "CONTACTADMIN";
+    pub const noperm = "NOPERM";
+    pub const inuse = "INUSE";
+    pub const expungeissued = "EXPUNGEISSUED";
+    pub const corruption = "CORRUPTION";
+    pub const serverbug = "SERVERBUG";
+    pub const clientbug = "CLIENTBUG";
+    pub const cannot = "CANNOT";
+    pub const limit = "LIMIT";
+};
+
 pub fn parseStatusLine(allocator: std.mem.Allocator, line: []const u8) !StatusResponse {
     if (line.len == 0) return error.InvalidStatusLine;
 

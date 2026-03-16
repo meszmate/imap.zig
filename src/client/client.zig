@@ -1,6 +1,7 @@
 const std = @import("std");
 const imap = @import("../root.zig");
 const wire = @import("../wire/root.zig");
+const auth = @import("../auth/root.zig");
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
@@ -76,6 +77,43 @@ pub const Client = struct {
         self.state = .authenticated;
     }
 
+    pub fn authenticatePlain(self: *Client, username: []const u8, password: []const u8) !void {
+        var result = try self.runAuthenticate("PLAIN", null);
+        defer result.deinit();
+        const response = try auth.plain.initialResponseAlloc(self.allocator, "", username, password);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&result);
+    }
+
+    pub fn authenticateExternal(self: *Client, authzid: []const u8) !void {
+        var result = try self.runAuthenticate("EXTERNAL", null);
+        defer result.deinit();
+        const response = try auth.external.initialResponseAlloc(self.allocator, authzid);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&result);
+    }
+
+    pub fn authenticateLogin(self: *Client, username: []const u8, password: []const u8) !void {
+        var result = try self.runAuthenticate("LOGIN", null);
+        defer result.deinit();
+        const user_b64 = try auth.login.encodeAlloc(self.allocator, username);
+        defer self.allocator.free(user_b64);
+        try self.transport.writeAll(user_b64);
+        try self.transport.writeAll("\r\n");
+        const password_prompt = try self.reader.readLineAlloc();
+        defer self.allocator.free(password_prompt);
+        if (password_prompt.len == 0 or password_prompt[0] != '+') return error.InvalidAuthenticateContinuation;
+        const pass_b64 = try auth.login.encodeAlloc(self.allocator, password);
+        defer self.allocator.free(pass_b64);
+        try self.transport.writeAll(pass_b64);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&result);
+    }
+
     pub fn select(self: *Client, mailbox: []const u8) !imap.SelectData {
         return self.selectLike("SELECT", mailbox, false);
     }
@@ -85,18 +123,41 @@ pub const Client = struct {
     }
 
     pub fn list(self: *Client, reference: []const u8, pattern: []const u8) ![]imap.ListData {
+        return self.listLike("LIST", reference, pattern);
+    }
+
+    pub fn lsub(self: *Client, reference: []const u8, pattern: []const u8) ![]imap.ListData {
+        return self.listLike("LSUB", reference, pattern);
+    }
+
+    pub fn create(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("CREATE", mailbox);
+    }
+
+    pub fn delete(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("DELETE", mailbox);
+    }
+
+    pub fn subscribe(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("SUBSCRIBE", mailbox);
+    }
+
+    pub fn unsubscribe(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("UNSUBSCRIBE", mailbox);
+    }
+
+    pub fn rename(self: *Client, mailbox: []const u8, new_mailbox: []const u8) !void {
         var command: std.ArrayList(u8) = .empty;
         defer command.deinit(self.allocator);
         const writer = command.writer(self.allocator);
-        try writer.writeAll("LIST ");
-        try wire.writeQuoted(writer, reference);
+        try writer.writeAll("RENAME ");
+        try wire.writeQuoted(writer, mailbox);
         try writer.writeByte(' ');
-        try wire.writeQuoted(writer, pattern);
+        try wire.writeQuoted(writer, new_mailbox);
 
         var result = try self.runCommand(command.items, null);
         defer result.deinit();
         try self.ensureOk(&result);
-        return parseListData(self.allocator, &result);
     }
 
     pub fn freeListData(self: *Client, items: []imap.ListData) void {
@@ -167,6 +228,142 @@ pub const Client = struct {
         self.allocator.free(lines);
     }
 
+    pub fn namespace(self: *Client) ![][]u8 {
+        var result = try self.runSimple("NAMESPACE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn id(self: *Client, fields: []const [2][]const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("ID ");
+        if (fields.len == 0) {
+            try writer.writeAll("NIL");
+        } else {
+            try writer.writeByte('(');
+            for (fields, 0..) |field, index| {
+                if (index != 0) try writer.writeByte(' ');
+                try wire.writeQuoted(writer, field[0]);
+                try writer.writeByte(' ');
+                try wire.writeQuoted(writer, field[1]);
+            }
+            try writer.writeByte(')');
+        }
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn enable(self: *Client, capabilities: []const []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("ENABLE");
+        for (capabilities) |cap_name| {
+            try writer.writeByte(' ');
+            try writer.writeAll(cap_name);
+        }
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn idleOnce(self: *Client) ![][]u8 {
+        const tag = try self.nextTagString();
+        defer self.allocator.free(tag);
+
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
+        try line.writer(self.allocator).print("{s} IDLE\r\n", .{tag});
+        try self.transport.writeAll(line.items);
+
+        const cont = try self.reader.readLineAlloc();
+        defer self.allocator.free(cont);
+        if (cont.len == 0 or cont[0] != '+') return error.InvalidIdleContinuation;
+
+        var out: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (out.items) |item| self.allocator.free(item);
+            out.deinit(self.allocator);
+        }
+
+        while (true) {
+            const response_line = try self.reader.readLineAlloc();
+            errdefer self.allocator.free(response_line);
+            if (std.mem.startsWith(u8, response_line, "* ")) {
+                try out.append(self.allocator, response_line);
+                break;
+            }
+            self.allocator.free(response_line);
+            break;
+        }
+
+        try self.transport.writeAll("DONE\r\n");
+        const done_line = try self.reader.readLineAlloc();
+        defer self.allocator.free(done_line);
+        if (!std.mem.startsWith(u8, done_line, tag)) return error.InvalidIdleCompletion;
+
+        return out.toOwnedSlice(self.allocator);
+    }
+
+    pub fn unselect(self: *Client) !void {
+        var result = try self.runSimple("UNSELECT");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        self.state = .authenticated;
+    }
+
+    pub fn closeMailbox(self: *Client) !void {
+        var result = try self.runSimple("CLOSE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        self.state = .authenticated;
+    }
+
+    pub fn expunge(self: *Client) ![][]u8 {
+        var result = try self.runSimple("EXPUNGE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn copy(self: *Client, set: []const u8, destination: []const u8) !imap.CopyData {
+        return self.copyLike("COPY", set, destination);
+    }
+
+    pub fn move(self: *Client, set: []const u8, destination: []const u8) !imap.CopyData {
+        return self.copyLike("MOVE", set, destination);
+    }
+
+    pub fn freeCopyData(self: *Client, data: *imap.CopyData) void {
+        if (data.source_uids.len != 0) self.allocator.free(data.source_uids);
+        if (data.dest_uids.len != 0) self.allocator.free(data.dest_uids);
+        data.* = undefined;
+    }
+
+    pub fn storeRaw(self: *Client, set: []const u8, operation: []const u8, flags: []const []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.print("STORE {s} {s} (", .{ set, operation });
+        for (flags, 0..) |flag, index| {
+            if (index != 0) try writer.writeByte(' ');
+            try writer.writeAll(flag);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
     fn readGreeting(self: *Client) !void {
         const line = try self.reader.readLineAlloc();
         defer self.allocator.free(line);
@@ -209,6 +406,88 @@ pub const Client = struct {
 
     fn runSimple(self: *Client, command: []const u8) !CommandResult {
         return self.runCommand(command, null);
+    }
+
+    fn runAuthenticate(self: *Client, mechanism: []const u8, initial: ?[]const u8) !CommandResult {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("AUTHENTICATE ");
+        try writer.writeAll(mechanism);
+        if (initial) |value| {
+            try writer.writeByte(' ');
+            try writer.writeAll(value);
+        }
+        const tag = try self.nextTagString();
+        defer self.allocator.free(tag);
+
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
+        try line.writer(self.allocator).print("{s} {s}\r\n", .{ tag, command.items });
+        try self.transport.writeAll(line.items);
+
+        const cont = try self.reader.readLineAlloc();
+        if (cont.len == 0 or cont[0] != '+') {
+            defer self.allocator.free(cont);
+            return error.InvalidAuthenticateContinuation;
+        }
+        self.allocator.free(cont);
+        return CommandResult{
+            .allocator = self.allocator,
+            .tagged = .{ .kind = .bad, .tag = try self.allocator.dupe(u8, tag), .text = &.{} },
+        };
+    }
+
+    fn finishAuthenticate(self: *Client, result: *CommandResult) !void {
+        const line = try self.reader.readLineAlloc();
+        defer self.allocator.free(line);
+        if (!std.mem.startsWith(u8, line, result.tagged.tag.?)) return error.InvalidAuthenticateCompletion;
+        if (result.tagged.tag) |tag| self.allocator.free(tag);
+        result.tagged = try imap.parseStatusLine(self.allocator, line);
+        try self.ensureOk(result);
+        self.state = .authenticated;
+    }
+
+    fn listLike(self: *Client, verb: []const u8, reference: []const u8, pattern: []const u8) ![]imap.ListData {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll(verb);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, reference);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, pattern);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseListData(self.allocator, &result);
+    }
+
+    fn simpleMailboxCommand(self: *Client, verb: []const u8, mailbox: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll(verb);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    fn copyLike(self: *Client, verb: []const u8, set: []const u8, destination: []const u8) !imap.CopyData {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.print("{s} {s} ", .{ verb, set });
+        try wire.writeQuoted(writer, destination);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseCopyData(self.allocator, &result);
     }
 
     fn runCommand(self: *Client, command: []const u8, literal: ?[]const u8) !CommandResult {
@@ -382,6 +661,21 @@ fn parseAppendData(result: *const CommandResult) imap.AppendData {
     return data;
 }
 
+fn parseCopyData(allocator: std.mem.Allocator, result: *const CommandResult) !imap.CopyData {
+    var data = imap.CopyData{};
+    if (result.tagged.code) |code| {
+        if (std.ascii.eqlIgnoreCase(code, "COPYUID")) {
+            if (result.tagged.code_arg) |arg| {
+                var it = std.mem.tokenizeAny(u8, arg, " ");
+                if (it.next()) |uid_validity| data.uid_validity = std.fmt.parseInt(u32, uid_validity, 10) catch null;
+                if (it.next()) |src| data.source_uids = try parseUidCsvAlloc(allocator, src);
+                if (it.next()) |dst| data.dest_uids = try parseUidCsvAlloc(allocator, dst);
+            }
+        }
+    }
+    return data;
+}
+
 fn parseSearchData(allocator: std.mem.Allocator, result: *const CommandResult) ![]u32 {
     for (result.untagged.items) |line| {
         if (!std.mem.startsWith(u8, line, "* SEARCH")) continue;
@@ -415,4 +709,19 @@ fn cloneLines(allocator: std.mem.Allocator, lines: []const []u8) ![][]u8 {
         try out.append(allocator, try allocator.dupe(u8, line));
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn parseUidCsvAlloc(allocator: std.mem.Allocator, text: []const u8) ![]const imap.UID {
+    if (text.len == 0) return allocator.alloc(imap.UID, 0);
+    var count: usize = 1;
+    for (text) |byte| {
+        if (byte == ',') count += 1;
+    }
+    const values = try allocator.alloc(imap.UID, count);
+    var it = std.mem.splitScalar(u8, text, ',');
+    var index: usize = 0;
+    while (it.next()) |part| : (index += 1) {
+        values[index] = try std.fmt.parseInt(imap.UID, part, 10);
+    }
+    return values;
 }
