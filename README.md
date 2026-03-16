@@ -9,8 +9,8 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 
 - IMAP4rev1-oriented protocol types, status parsing, number set parsing, modified UTF-7 mailbox handling, and a broader registry-backed capability surface
 - Public wire package with encoder/decoder primitives, literal handling, line reading, transports, and modified UTF-7
-- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, and `LOGOUT`
-- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, and `EXPUNGE`
+- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`
+- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`
 - Auth namespace with mechanism helpers for `ANONYMOUS`, `CRAM-MD5`, `EXTERNAL`, `LOGIN`, `OAUTHBEARER`, `PLAIN`, and `XOAUTH2`
 - Filesystem-backed store backend in addition to the in-memory reference store
 - Type-erased store backend/user/mailbox interfaces for backend-agnostic integration code
@@ -18,7 +18,7 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 - Public middleware chain primitives plus reusable logging, recovery, timeout, rate-limit, and metrics middleware
 - Public server connection/session primitives and a reusable client connection pool
 - Transport abstraction for testing, scripting, and custom I/O
-- GitHub Actions CI, examples, and unit tests
+- GitHub Actions CI with multi-platform build, test, and cross-compile jobs, plus examples and unit tests
 
 ## Status
 
@@ -41,16 +41,23 @@ Implemented now:
 - Backend-agnostic store interfaces for memstore and fsstore
 - Middleware and server connection/session building blocks for future dispatcher refactors
 - Basic authenticated client pooling with idle reuse
+- SORT and THREAD command support (stub implementations)
+- ACL commands (GETACL, SETACL, DELETEACL, LISTRIGHTS, MYRIGHTS)
+- QUOTA commands (GETQUOTA, SETQUOTA, GETQUOTAROOT)
+- METADATA commands (GETMETADATA, SETMETADATA)
+- STARTTLS and COMPRESS=DEFLATE command stubs
+- UNAUTHENTICATE for session reset
+- REPLACE for atomic message replacement
+- Literal+/Literal- marker parsing (RFC 7888)
+- Extended SEARCH criteria: LARGER, SMALLER, HEADER, KEYWORD, UNKEYWORD, date-based filters
 
 Planned next:
 
-- TLS and STARTTLS helpers
-- broader SASL/auth server integration
-- IDLE and asynchronous update broadcasting
-- richer `FETCH`/`BODYSTRUCTURE` parsing
-- extension registry and more RFC extensions
+- TLS socket upgrade (STARTTLS negotiation exists but no actual TLS yet)
+- COMPRESS=DEFLATE actual compression layer
+- Richer FETCH/BODYSTRUCTURE parsing
 - IMAP4rev2-specific behavior tightening
-- PostgreSQL-backed store module
+- Full CONDSTORE/QRESYNC mod-sequence tracking
 
 ## Installation
 
@@ -160,6 +167,14 @@ The protocol surface and command set were shaped against:
 - [RFC 2342: NAMESPACE](https://www.rfc-editor.org/rfc/rfc2342.html)
 - [RFC 2971: ID](https://www.rfc-editor.org/rfc/rfc2971.html)
 - [RFC 5161: ENABLE](https://www.rfc-editor.org/rfc/rfc5161.html)
+- [RFC 5256: SORT and THREAD](https://www.rfc-editor.org/rfc/rfc5256.html)
+- [RFC 4314: ACL](https://www.rfc-editor.org/rfc/rfc4314.html)
+- [RFC 9208: QUOTA](https://www.rfc-editor.org/rfc/rfc9208.html)
+- [RFC 5464: METADATA](https://www.rfc-editor.org/rfc/rfc5464.html)
+- [RFC 4978: COMPRESS=DEFLATE](https://www.rfc-editor.org/rfc/rfc4978.html)
+- [RFC 7888: LITERAL+](https://www.rfc-editor.org/rfc/rfc7888.html)
+- [RFC 8437: UNAUTHENTICATE](https://www.rfc-editor.org/rfc/rfc8437.html)
+- [RFC 8508: REPLACE](https://www.rfc-editor.org/rfc/rfc8508.html)
 - [IANA IMAP Capabilities Registry](https://www.iana.org/assignments/imap-capabilities/imap-capabilities.xhtml)
 - [IANA IMAP Response Codes Registry](https://www.iana.org/assignments/imap-response-codes/imap-response-codes.xhtml)
 - [IANA IMAP Mailbox Name Attributes Registry](https://www.iana.org/assignments/imap-mailbox-name-attributes/imap-mailbox-name-attributes.xhtml)

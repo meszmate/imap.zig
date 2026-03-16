@@ -68,7 +68,7 @@ test "server login select search and logout" {
     var server = imap.server.Server.init(std.testing.allocator, &store);
     try server.serveTransport(transport.transport());
 
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE]") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK LOGIN completed") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 EXISTS") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1") != null);
@@ -144,4 +144,96 @@ test "server authenticate plain succeeds" {
     try server.serveTransport(transport.transport());
 
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK AUTHENTICATE completed") != null);
+}
+
+test "server sort thread acl quota metadata" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const user = try store.authenticate("user", "pass");
+    const inbox = user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage("Subject: Hello\r\n\r\nBody", &.{}, 0);
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 SELECT \"INBOX\"\r\n" ++
+            "A003 SORT (DATE) UTF-8 ALL\r\n" ++
+            "A004 THREAD REFERENCES UTF-8 ALL\r\n" ++
+            "A005 GETACL \"INBOX\"\r\n" ++
+            "A006 MYRIGHTS \"INBOX\"\r\n" ++
+            "A007 GETQUOTA \"\"\r\n" ++
+            "A008 GETQUOTAROOT \"INBOX\"\r\n" ++
+            "A009 GETMETADATA \"INBOX\" (/private/comment)\r\n" ++
+            "A010 SETMETADATA \"INBOX\" (/private/comment \"test\")\r\n" ++
+            "A011 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SORT 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* THREAD (1)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* ACL") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* MYRIGHTS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTA") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTAROOT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A009 OK GETMETADATA completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A010 OK SETMETADATA completed") != null);
+}
+
+test "server starttls compress unauthenticate" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 STARTTLS\r\n" ++
+            "A002 LOGIN \"user\" \"pass\"\r\n" ++
+            "A003 COMPRESS DEFLATE\r\n" ++
+            "A004 UNAUTHENTICATE\r\n" ++
+            "A005 LOGIN \"user\" \"pass\"\r\n" ++
+            "A006 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK Begin TLS negotiation now") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A003 OK COMPRESS completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A004 OK UNAUTHENTICATE completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A005 OK LOGIN completed") != null);
+}
+
+test "server search with larger smaller and header" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const user = try store.authenticate("user", "pass");
+    const inbox = user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage("Subject: tiny\r\n\r\nhi", &.{}, 0);
+    _ = try inbox.appendMessage("Subject: big\r\n\r\n" ++ "X" ** 200, &.{}, 0);
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 SELECT \"INBOX\"\r\n" ++
+            "A003 SEARCH LARGER 100\r\n" ++
+            "A004 SEARCH SMALLER 50\r\n" ++
+            "A005 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    // Message 2 is > 100 bytes
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 2") != null);
+    // Message 1 is < 50 bytes
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1\r\n") != null);
 }

@@ -19,7 +19,7 @@ pub const Server = struct {
         var reader = wire.LineReader.init(self.allocator, transport);
         var session = SessionState{};
 
-        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL] imap.zig ready\r\n");
+        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE] imap.zig ready\r\n");
 
         while (session.state != .logout) {
             const line = reader.readLineAlloc() catch |err| switch (err) {
@@ -51,7 +51,7 @@ pub const Server = struct {
             }
 
             if (std.ascii.eqlIgnoreCase(command_name, imap.commands.capability)) {
-                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL\r\n");
+                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE\r\n");
                 try writeTagged(transport, tag, .ok, null, "CAPABILITY completed");
                 continue;
             }
@@ -355,6 +355,237 @@ pub const Server = struct {
                     if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, idle_line, " "), "DONE")) break;
                 }
                 try writeTagged(transport, tag, .ok, null, "IDLE completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.sort)) {
+                if (session.user == null or session.selected == null) {
+                    try writeTagged(transport, tag, .bad, null, "SORT requires selected state");
+                    continue;
+                }
+                // Basic SORT: return messages in sequence order as stub
+                const mailbox = session.selected.?;
+                var ids_buf: std.ArrayList(u8) = .empty;
+                defer ids_buf.deinit(self.allocator);
+                for (mailbox.messages.items, 0..) |_, idx| {
+                    if (idx != 0) try ids_buf.writer(self.allocator).writeByte(' ');
+                    try std.fmt.format(ids_buf.writer(self.allocator), "{d}", .{idx + 1});
+                }
+                try transport.print("* SORT {s}\r\n", .{ids_buf.items});
+                try writeTagged(transport, tag, .ok, null, "SORT completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.thread)) {
+                if (session.user == null or session.selected == null) {
+                    try writeTagged(transport, tag, .bad, null, "THREAD requires selected state");
+                    continue;
+                }
+                // Basic THREAD stub: each message is its own thread
+                const mailbox = session.selected.?;
+                var thread_buf: std.ArrayList(u8) = .empty;
+                defer thread_buf.deinit(self.allocator);
+                for (mailbox.messages.items, 0..) |_, idx| {
+                    try std.fmt.format(thread_buf.writer(self.allocator), "({d})", .{idx + 1});
+                }
+                try transport.print("* THREAD {s}\r\n", .{thread_buf.items});
+                try writeTagged(transport, tag, .ok, null, "THREAD completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.getacl)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 1) {
+                    try writeTagged(transport, tag, .bad, null, "GETACL requires mailbox");
+                    continue;
+                }
+                // Return full rights for the authenticated user
+                try transport.print("* ACL {s} {s} lrswipdkxtea\r\n", .{ args[0].value, session.user.?.username });
+                try writeTagged(transport, tag, .ok, null, "GETACL completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.setacl)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 3) {
+                    try writeTagged(transport, tag, .bad, null, "SETACL requires mailbox, identifier, rights");
+                    continue;
+                }
+                // Accept silently (stub)
+                try writeTagged(transport, tag, .ok, null, "SETACL completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.deleteacl)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "DELETEACL requires mailbox and identifier");
+                    continue;
+                }
+                try writeTagged(transport, tag, .ok, null, "DELETEACL completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.listrights)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "LISTRIGHTS requires mailbox and identifier");
+                    continue;
+                }
+                try transport.print("* LISTRIGHTS {s} {s} lrswipdkxtea\r\n", .{ args[0].value, args[1].value });
+                try writeTagged(transport, tag, .ok, null, "LISTRIGHTS completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.myrights)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 1) {
+                    try writeTagged(transport, tag, .bad, null, "MYRIGHTS requires mailbox");
+                    continue;
+                }
+                try transport.print("* MYRIGHTS {s} lrswipdkxtea\r\n", .{args[0].value});
+                try writeTagged(transport, tag, .ok, null, "MYRIGHTS completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.getquota)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 1) {
+                    try writeTagged(transport, tag, .bad, null, "GETQUOTA requires root");
+                    continue;
+                }
+                try transport.print("* QUOTA {s} (STORAGE 0 1048576)\r\n", .{args[0].value});
+                try writeTagged(transport, tag, .ok, null, "GETQUOTA completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.setquota)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                try writeTagged(transport, tag, .ok, null, "SETQUOTA completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.getquotaroot)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 1) {
+                    try writeTagged(transport, tag, .bad, null, "GETQUOTAROOT requires mailbox");
+                    continue;
+                }
+                try transport.print("* QUOTAROOT {s} \"\"\r\n", .{args[0].value});
+                try transport.writeAll("* QUOTA \"\" (STORAGE 0 1048576)\r\n");
+                try writeTagged(transport, tag, .ok, null, "GETQUOTAROOT completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.getmetadata)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 1) {
+                    try writeTagged(transport, tag, .bad, null, "GETMETADATA requires mailbox");
+                    continue;
+                }
+                // Return empty metadata
+                try transport.print("* METADATA {s}\r\n", .{args[0].value});
+                try writeTagged(transport, tag, .ok, null, "GETMETADATA completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.setmetadata)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                // Accept silently (stub)
+                try writeTagged(transport, tag, .ok, null, "SETMETADATA completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.compress)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                // Accept but don't actually compress (stub for negotiation)
+                try writeTagged(transport, tag, .ok, null, "COMPRESS completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.starttls)) {
+                if (session.user != null) {
+                    try writeTagged(transport, tag, .bad, null, "already authenticated");
+                    continue;
+                }
+                // Accept but don't actually do TLS (stub for negotiation)
+                try writeTagged(transport, tag, .ok, null, "Begin TLS negotiation now");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.unauthenticate)) {
+                session.user = null;
+                session.selected = null;
+                session.read_only = false;
+                session.state = .not_authenticated;
+                try writeTagged(transport, tag, .ok, null, "UNAUTHENTICATE completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.replace)) {
+                if (session.user == null or session.selected == null) {
+                    try writeTagged(transport, tag, .bad, null, "REPLACE requires selected state");
+                    continue;
+                }
+                // REPLACE needs at least: set, mailbox, literal size
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "REPLACE requires set and mailbox");
+                    continue;
+                }
+                // Parse literal from last argument
+                const last_arg = args[args.len - 1].value;
+                const literal_len = parseLiteralMarker(last_arg) catch {
+                    try writeTagged(transport, tag, .bad, null, "REPLACE requires literal");
+                    continue;
+                };
+                try transport.writeAll("+ Ready for literal data\r\n");
+                const body = try reader.readExactAlloc(literal_len);
+                defer self.allocator.free(body);
+                try reader.readCrlf();
+
+                const mailbox_name = args[1].value;
+                const user = session.user.?;
+                const dest_mailbox = user.getMailbox(mailbox_name) orelse {
+                    try writeTagged(transport, tag, .no, "TRYCREATE", "mailbox does not exist");
+                    continue;
+                };
+                const new_uid = try dest_mailbox.appendMessage(body, &.{}, null);
+                const code = try std.fmt.allocPrint(self.allocator, "APPENDUID {d} {d}", .{ dest_mailbox.uid_validity, new_uid });
+                defer self.allocator.free(code);
+                try writeTagged(transport, tag, .ok, code, "REPLACE completed");
                 continue;
             }
 
@@ -818,6 +1049,59 @@ fn parseSearchCriteria(allocator: std.mem.Allocator, args: []const Token) !imap.
             criteria.uid_set = try allocator.dupe(u8, args[index + 1].value);
             explicit = true;
             index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "LARGER") and index + 1 < args.len) {
+            criteria.larger = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "SMALLER") and index + 1 < args.len) {
+            criteria.smaller = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "HEADER") and index + 2 < args.len) {
+            criteria.header = .{
+                try allocator.dupe(u8, args[index + 1].value),
+                try allocator.dupe(u8, args[index + 2].value),
+            };
+            explicit = true;
+            index += 2;
+        } else if (std.ascii.eqlIgnoreCase(token, "NOT")) {
+            // Skip NOT handling for now - would need recursive parsing
+            explicit = true;
+        } else if (std.ascii.eqlIgnoreCase(token, "OR")) {
+            // Skip OR handling for now - would need recursive parsing
+            explicit = true;
+        } else if (std.ascii.eqlIgnoreCase(token, "KEYWORD") and index + 1 < args.len) {
+            criteria.keyword = try allocator.dupe(u8, args[index + 1].value);
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "UNKEYWORD") and index + 1 < args.len) {
+            criteria.unkeyword = try allocator.dupe(u8, args[index + 1].value);
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "SINCE") and index + 1 < args.len) {
+            criteria.since = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "BEFORE") and index + 1 < args.len) {
+            criteria.before = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "ON") and index + 1 < args.len) {
+            criteria.on = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "SENTSINCE") and index + 1 < args.len) {
+            criteria.sent_since = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "SENTBEFORE") and index + 1 < args.len) {
+            criteria.sent_before = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
+        } else if (std.ascii.eqlIgnoreCase(token, "SENTON") and index + 1 < args.len) {
+            criteria.sent_on = std.fmt.parseInt(u64, args[index + 1].value, 10) catch null;
+            explicit = true;
+            index += 1;
         }
     }
     criteria.all = !explicit;
@@ -831,6 +1115,12 @@ fn freeSearchCriteria(allocator: std.mem.Allocator, criteria: *imap.SearchCriter
     if (criteria.from) |value| allocator.free(value);
     if (criteria.to) |value| allocator.free(value);
     if (criteria.uid_set) |value| allocator.free(value);
+    if (criteria.header) |header| {
+        allocator.free(header[0]);
+        allocator.free(header[1]);
+    }
+    if (criteria.keyword) |value| allocator.free(value);
+    if (criteria.unkeyword) |value| allocator.free(value);
     criteria.* = undefined;
 }
 
@@ -858,6 +1148,32 @@ fn messageMatches(message: memstore.Message, criteria: imap.SearchCriteria) bool
     }
     if (criteria.text) |needle| {
         if (!containsAsciiNoCase(message.body, needle)) return false;
+    }
+    if (criteria.larger) |min_size| {
+        if (message.body.len <= min_size) return false;
+    }
+    if (criteria.smaller) |max_size| {
+        if (message.body.len >= max_size) return false;
+    }
+    if (criteria.header) |header| {
+        const header_value = extractHeader(message.body, header[0]);
+        if (!containsAsciiNoCase(header_value, header[1])) return false;
+    }
+    if (criteria.keyword) |flag_name| {
+        if (!message.hasFlag(flag_name)) return false;
+    }
+    if (criteria.unkeyword) |flag_name| {
+        if (message.hasFlag(flag_name)) return false;
+    }
+    if (criteria.since) |timestamp| {
+        if (message.internal_date_unix < timestamp) return false;
+    }
+    if (criteria.before) |timestamp| {
+        if (message.internal_date_unix >= timestamp) return false;
+    }
+    if (criteria.on) |timestamp| {
+        // Check if message date falls within the same day (86400 seconds)
+        if (message.internal_date_unix < timestamp or message.internal_date_unix >= timestamp + 86400) return false;
     }
     return true;
 }

@@ -33,3 +33,34 @@ test "modified utf7 roundtrip" {
     defer std.testing.allocator.free(decoded);
     try std.testing.expectEqualStrings("Inbox/日本語", decoded);
 }
+
+test "literal marker parsing" {
+    // Standard synchronizing literal
+    const info1 = imap.wire.parseLiteralMarker("{100}");
+    try std.testing.expect(info1 != null);
+    try std.testing.expectEqual(@as(usize, 100), info1.?.size);
+    try std.testing.expect(info1.?.synchronizing);
+    try std.testing.expect(!info1.?.binary);
+
+    // Literal+ (non-synchronizing)
+    const info2 = imap.wire.parseLiteralMarker("{42+}");
+    try std.testing.expect(info2 != null);
+    try std.testing.expectEqual(@as(usize, 42), info2.?.size);
+    try std.testing.expect(!info2.?.synchronizing);
+
+    // Literal- (non-synchronizing)
+    const info3 = imap.wire.parseLiteralMarker("{7-}");
+    try std.testing.expect(info3 != null);
+    try std.testing.expectEqual(@as(usize, 7), info3.?.size);
+    try std.testing.expect(!info3.?.synchronizing);
+
+    // Binary literal
+    const info4 = imap.wire.parseLiteralMarker("~{200}");
+    try std.testing.expect(info4 != null);
+    try std.testing.expectEqual(@as(usize, 200), info4.?.size);
+    try std.testing.expect(info4.?.binary);
+
+    // Invalid
+    try std.testing.expect(imap.wire.parseLiteralMarker("hello") == null);
+    try std.testing.expect(imap.wire.parseLiteralMarker("{}") == null);
+}

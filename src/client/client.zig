@@ -364,6 +364,215 @@ pub const Client = struct {
         return cloneLines(self.allocator, result.untagged.items);
     }
 
+    pub fn sort(self: *Client, criteria: []const imap.SortCriterion, charset: []const u8, search_criteria: []const u8) ![]u32 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SORT (");
+        for (criteria, 0..) |c, i| {
+            if (i != 0) try writer.writeByte(' ');
+            if (c.reverse) try writer.writeAll("REVERSE ");
+            try writer.writeAll(c.key.label());
+        }
+        try writer.print(") {s} {s}", .{ charset, search_criteria });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseSortData(self.allocator, &result);
+    }
+
+    pub fn threadCmd(self: *Client, algorithm: imap.ThreadAlgorithm, charset: []const u8, search_criteria: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.print("THREAD {s} {s} {s}", .{ algorithm.label(), charset, search_criteria });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn getAcl(self: *Client, mailbox: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETACL ");
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn setAcl(self: *Client, mailbox: []const u8, identifier: []const u8, rights: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SETACL ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {s} {s}", .{ identifier, rights });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn deleteAcl(self: *Client, mailbox: []const u8, identifier: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("DELETEACL ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {s}", .{identifier});
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn listRights(self: *Client, mailbox: []const u8, identifier: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("LISTRIGHTS ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {s}", .{identifier});
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn myRights(self: *Client, mailbox: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("MYRIGHTS ");
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn getQuota(self: *Client, root: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETQUOTA ");
+        try wire.writeQuoted(writer, root);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn setQuota(self: *Client, root: []const u8, resources: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SETQUOTA ");
+        try wire.writeQuoted(writer, root);
+        try writer.print(" ({s})", .{resources});
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn getQuotaRoot(self: *Client, mailbox: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETQUOTAROOT ");
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn getMetadata(self: *Client, mailbox: []const u8, entries: []const []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETMETADATA ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.writeAll(" (");
+        for (entries, 0..) |entry, i| {
+            if (i != 0) try writer.writeByte(' ');
+            try wire.writeQuoted(writer, entry);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn setMetadata(self: *Client, mailbox: []const u8, entries: []const [2][]const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SETMETADATA ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.writeAll(" (");
+        for (entries, 0..) |entry, i| {
+            if (i != 0) try writer.writeByte(' ');
+            try wire.writeQuoted(writer, entry[0]);
+            try writer.writeByte(' ');
+            try wire.writeQuoted(writer, entry[1]);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn compress(self: *Client) !void {
+        var result = try self.runSimple("COMPRESS DEFLATE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn unauthenticate(self: *Client) !void {
+        var result = try self.runSimple("UNAUTHENTICATE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        self.state = .not_authenticated;
+    }
+
+    pub fn replaceMsg(self: *Client, set: []const u8, mailbox: []const u8, bytes: []const u8) !imap.AppendData {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("REPLACE ");
+        try writer.writeAll(set);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {{{d}}}", .{bytes.len});
+
+        var result = try self.runCommand(command.items, bytes);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseAppendData(&result);
+    }
+
+    pub fn starttls(self: *Client) !void {
+        var result = try self.runSimple("STARTTLS");
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
     fn readGreeting(self: *Client) !void {
         const line = try self.reader.readLineAlloc();
         defer self.allocator.free(line);
@@ -709,6 +918,23 @@ fn cloneLines(allocator: std.mem.Allocator, lines: []const []u8) ![][]u8 {
         try out.append(allocator, try allocator.dupe(u8, line));
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn parseSortData(allocator: std.mem.Allocator, result: *const CommandResult) ![]u32 {
+    for (result.untagged.items) |line| {
+        if (!std.mem.startsWith(u8, line, "* SORT")) continue;
+        const suffix = std.mem.trimLeft(u8, line["* SORT".len..], " ");
+        if (suffix.len == 0) return allocator.alloc(u32, 0);
+
+        var values: std.ArrayList(u32) = .empty;
+        errdefer values.deinit(allocator);
+        var it = std.mem.tokenizeAny(u8, suffix, " ");
+        while (it.next()) |token| {
+            try values.append(allocator, try std.fmt.parseInt(u32, token, 10));
+        }
+        return values.toOwnedSlice(allocator);
+    }
+    return error.InvalidSortResponse;
 }
 
 fn parseUidCsvAlloc(allocator: std.mem.Allocator, text: []const u8) ![]const imap.UID {

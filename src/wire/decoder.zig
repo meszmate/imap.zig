@@ -14,6 +14,41 @@ pub const Token = struct {
     value: []const u8 = "",
 };
 
+pub const LiteralInfo = struct {
+    size: usize,
+    synchronizing: bool = true,
+    binary: bool = false,
+};
+
+pub fn parseLiteralMarker(text: []const u8) ?LiteralInfo {
+    if (text.len < 3) return null;
+    var start: usize = 0;
+    var binary = false;
+    if (text[0] == '~') {
+        binary = true;
+        start = 1;
+    }
+    if (text[start] != '{') return null;
+    const end = std.mem.indexOfScalar(u8, text[start..], '}') orelse return null;
+    const inner = text[start + 1 .. start + end];
+    if (inner.len == 0) return null;
+    var synchronizing = true;
+    var size_str = inner;
+    if (inner[inner.len - 1] == '+') {
+        synchronizing = false;
+        size_str = inner[0 .. inner.len - 1];
+    } else if (inner[inner.len - 1] == '-') {
+        synchronizing = false;
+        size_str = inner[0 .. inner.len - 1];
+    }
+    const size = std.fmt.parseInt(usize, size_str, 10) catch return null;
+    return LiteralInfo{
+        .size = size,
+        .synchronizing = synchronizing,
+        .binary = binary,
+    };
+}
+
 pub const Decoder = struct {
     allocator: std.mem.Allocator,
     input: []const u8,
