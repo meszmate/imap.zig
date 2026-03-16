@@ -10,6 +10,7 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 - IMAP4rev1-oriented protocol types, status parsing, number set parsing, modified UTF-7 mailbox handling, and a broader registry-backed capability surface
 - Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, and `LOGOUT`
 - In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, and `EXPUNGE`
+- Explicit connection state machine and extension registry inspired by the local `~/imap-go` architecture
 - Transport abstraction for testing, scripting, and custom I/O
 - GitHub Actions CI, examples, and unit tests
 
@@ -26,6 +27,8 @@ Implemented now:
 - Core command parsing and response generation
 - Basic IDLE flow and `DONE` termination
 - Capability, mailbox attribute, and response-code coverage widened from the current RFC/IANA registry surface
+- Extension registry with dependency resolution and built-in extension metadata
+- Explicit connection state machine for RFC-style state validation
 
 Planned next:
 
@@ -114,8 +117,10 @@ src/wire/              Transport, line reader, modified UTF-7
 src/client/            Synchronous IMAP client
 src/server/            Command dispatcher and TCP server loop
 src/store/             In-memory store backend
+src/state/             Connection state machine
+src/extension/         Extension metadata and dependency registry
 examples/              Simple client and server examples
-tests/                 Protocol, client, and server tests
+tests/                 Protocol, client, server, state, and extension tests
 ```
 
 ## Development
@@ -126,6 +131,8 @@ zig build test
 ./zig-out/bin/simple_server
 ./zig-out/bin/simple_client 127.0.0.1 1143 user password
 ```
+
+Contribution guidance lives in [CONTRIBUTING.md](/Users/meszmate/imap.zig/CONTRIBUTING.md).
 
 ## Research Notes
 
@@ -142,4 +149,4 @@ The protocol surface and command set were shaped against:
 - [IANA IMAP Response Codes Registry](https://www.iana.org/assignments/imap-response-codes/imap-response-codes.xhtml)
 - [IANA IMAP Mailbox Name Attributes Registry](https://www.iana.org/assignments/imap-mailbox-name-attributes/imap-mailbox-name-attributes.xhtml)
 
-The package structure was also informed by the local `~/imap-go` reference implementation.
+The package structure was also informed by the local `~/imap-go` reference implementation, especially its split between protocol types, client/server layers, state handling, and extension registration.

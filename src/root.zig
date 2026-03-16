@@ -7,6 +7,8 @@ pub const wire = @import("wire/root.zig");
 pub const client = @import("client/root.zig");
 pub const store = @import("store/root.zig");
 pub const server = @import("server/root.zig");
+pub const state = @import("state/root.zig");
+pub const extension = @import("extension/root.zig");
 
 pub const ConnState = types.ConnState;
 pub const Flag = types.Flag;
