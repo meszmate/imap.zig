@@ -121,3 +121,19 @@ test "client idleOnce reads continuation and sends DONE" {
     try std.testing.expectEqualStrings("* 3 EXISTS", lines[0]);
     try std.testing.expectEqualStrings("A0001 IDLE\r\nDONE\r\n", scripted.output.items);
 }
+
+test "client authenticatePlain sends challenge response" {
+    var scripted = ScriptTransport.init(
+        std.testing.allocator,
+        "* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN] hi\r\n" ++
+            "+ \r\n" ++
+            "A0001 OK AUTHENTICATE completed\r\n",
+    );
+    defer scripted.deinit();
+
+    var client = try imap.client.Client.init(std.testing.allocator, scripted.transport());
+    defer client.deinit();
+
+    try client.authenticatePlain("user", "pass");
+    try std.testing.expect(std.mem.startsWith(u8, scripted.output.items, "A0001 AUTHENTICATE PLAIN\r\n"));
+}

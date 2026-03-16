@@ -1,6 +1,7 @@
 const std = @import("std");
 const imap = @import("../root.zig");
 const wire = @import("../wire/root.zig");
+const auth = @import("../auth/root.zig");
 
 pub const Client = struct {
     allocator: std.mem.Allocator,
@@ -74,6 +75,43 @@ pub const Client = struct {
         defer result.deinit();
         try self.ensureOk(&result);
         self.state = .authenticated;
+    }
+
+    pub fn authenticatePlain(self: *Client, username: []const u8, password: []const u8) !void {
+        var result = try self.runAuthenticate("PLAIN", null);
+        defer result.deinit();
+        const response = try auth.plain.initialResponseAlloc(self.allocator, "", username, password);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&result);
+    }
+
+    pub fn authenticateExternal(self: *Client, authzid: []const u8) !void {
+        var result = try self.runAuthenticate("EXTERNAL", null);
+        defer result.deinit();
+        const response = try auth.external.initialResponseAlloc(self.allocator, authzid);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&result);
+    }
+
+    pub fn authenticateLogin(self: *Client, username: []const u8, password: []const u8) !void {
+        var result = try self.runAuthenticate("LOGIN", null);
+        defer result.deinit();
+        const user_b64 = try auth.login.encodeAlloc(self.allocator, username);
+        defer self.allocator.free(user_b64);
+        try self.transport.writeAll(user_b64);
+        try self.transport.writeAll("\r\n");
+        const password_prompt = try self.reader.readLineAlloc();
+        defer self.allocator.free(password_prompt);
+        if (password_prompt.len == 0 or password_prompt[0] != '+') return error.InvalidAuthenticateContinuation;
+        const pass_b64 = try auth.login.encodeAlloc(self.allocator, password);
+        defer self.allocator.free(pass_b64);
+        try self.transport.writeAll(pass_b64);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&result);
     }
 
     pub fn select(self: *Client, mailbox: []const u8) !imap.SelectData {
@@ -368,6 +406,46 @@ pub const Client = struct {
 
     fn runSimple(self: *Client, command: []const u8) !CommandResult {
         return self.runCommand(command, null);
+    }
+
+    fn runAuthenticate(self: *Client, mechanism: []const u8, initial: ?[]const u8) !CommandResult {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("AUTHENTICATE ");
+        try writer.writeAll(mechanism);
+        if (initial) |value| {
+            try writer.writeByte(' ');
+            try writer.writeAll(value);
+        }
+        const tag = try self.nextTagString();
+        defer self.allocator.free(tag);
+
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
+        try line.writer(self.allocator).print("{s} {s}\r\n", .{ tag, command.items });
+        try self.transport.writeAll(line.items);
+
+        const cont = try self.reader.readLineAlloc();
+        if (cont.len == 0 or cont[0] != '+') {
+            defer self.allocator.free(cont);
+            return error.InvalidAuthenticateContinuation;
+        }
+        self.allocator.free(cont);
+        return CommandResult{
+            .allocator = self.allocator,
+            .tagged = .{ .kind = .bad, .tag = try self.allocator.dupe(u8, tag), .text = &.{} },
+        };
+    }
+
+    fn finishAuthenticate(self: *Client, result: *CommandResult) !void {
+        const line = try self.reader.readLineAlloc();
+        defer self.allocator.free(line);
+        if (!std.mem.startsWith(u8, line, result.tagged.tag.?)) return error.InvalidAuthenticateCompletion;
+        if (result.tagged.tag) |tag| self.allocator.free(tag);
+        result.tagged = try imap.parseStatusLine(self.allocator, line);
+        try self.ensureOk(result);
+        self.state = .authenticated;
     }
 
     fn listLike(self: *Client, verb: []const u8, reference: []const u8, pattern: []const u8) ![]imap.ListData {

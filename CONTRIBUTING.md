@@ -17,12 +17,13 @@ zig build test
 
 - [src/types.zig](/Users/meszmate/imap.zig/src/types.zig): shared protocol data types
 - [src/wire/](/Users/meszmate/imap.zig/src/wire): transport, line parsing, modified UTF-7
+- [src/auth/](/Users/meszmate/imap.zig/src/auth): SASL/auth mechanism helpers
 - [src/client/](/Users/meszmate/imap.zig/src/client): synchronous client API
 - [src/server/](/Users/meszmate/imap.zig/src/server): command dispatcher and server loop
-- [src/store/](/Users/meszmate/imap.zig/src/store): in-memory storage backend
+- [src/store/](/Users/meszmate/imap.zig/src/store): in-memory and filesystem storage backends
 - [src/state/](/Users/meszmate/imap.zig/src/state): connection state machine
 - [src/extension/](/Users/meszmate/imap.zig/src/extension): extension metadata and registry
-- [tests/](/Users/meszmate/imap.zig/tests): protocol, client, server, state, and extension tests
+- [tests/](/Users/meszmate/imap.zig/tests): protocol, auth, client, server, store, state, and extension tests
 
 ## Guidelines
 

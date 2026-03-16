@@ -2,6 +2,7 @@ const std = @import("std");
 const imap = @import("../root.zig");
 const memstore = @import("../store/memstore.zig");
 const wire = @import("../wire/root.zig");
+const auth = @import("../auth/root.zig");
 
 pub const Server = struct {
     allocator: std.mem.Allocator,
@@ -18,7 +19,7 @@ pub const Server = struct {
         var reader = wire.LineReader.init(self.allocator, transport);
         var session = SessionState{};
 
-        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE] imap.zig ready\r\n");
+        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL] imap.zig ready\r\n");
 
         while (session.state != .logout) {
             const line = reader.readLineAlloc() catch |err| switch (err) {
@@ -50,7 +51,7 @@ pub const Server = struct {
             }
 
             if (std.ascii.eqlIgnoreCase(command_name, imap.commands.capability)) {
-                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE\r\n");
+                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL\r\n");
                 try writeTagged(transport, tag, .ok, null, "CAPABILITY completed");
                 continue;
             }
@@ -84,6 +85,81 @@ pub const Server = struct {
 
             if (std.ascii.eqlIgnoreCase(command_name, imap.commands.enable)) {
                 try writeTagged(transport, tag, .ok, null, "ENABLE completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.authenticate)) {
+                if (args.len < 1) {
+                    try writeTagged(transport, tag, .bad, null, "AUTHENTICATE requires mechanism");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(args[0].value, "PLAIN")) {
+                    try transport.writeAll("+ \r\n");
+                    const response = try reader.readLineAlloc();
+                    defer self.allocator.free(response);
+                    const creds = auth.plain.decodeResponseAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid PLAIN response");
+                        continue;
+                    };
+                    defer {
+                        self.allocator.free(creds.authzid);
+                        self.allocator.free(creds.username);
+                        self.allocator.free(creds.password);
+                    }
+                    const user = self.store.authenticate(creds.username, creds.password) catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(args[0].value, "EXTERNAL")) {
+                    try transport.writeAll("+ \r\n");
+                    const response = try reader.readLineAlloc();
+                    defer self.allocator.free(response);
+                    const authzid = auth.external.decodeAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid EXTERNAL response");
+                        continue;
+                    };
+                    defer self.allocator.free(authzid);
+                    const user = self.store.authenticateExternal(authzid) catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(args[0].value, "LOGIN")) {
+                    try transport.print("+ {s}\r\n", .{auth.login.usernamePrompt()});
+                    const username_b64 = try reader.readLineAlloc();
+                    defer self.allocator.free(username_b64);
+                    const username = auth.login.decodeAlloc(self.allocator, std.mem.trim(u8, username_b64, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid LOGIN username");
+                        continue;
+                    };
+                    defer self.allocator.free(username);
+                    try transport.print("+ {s}\r\n", .{auth.login.passwordPrompt()});
+                    const password_b64 = try reader.readLineAlloc();
+                    defer self.allocator.free(password_b64);
+                    const password = auth.login.decodeAlloc(self.allocator, std.mem.trim(u8, password_b64, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid LOGIN password");
+                        continue;
+                    };
+                    defer self.allocator.free(password);
+                    const user = self.store.authenticate(username, password) catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                try writeTagged(transport, tag, .bad, null, "unsupported AUTHENTICATE mechanism");
                 continue;
             }
 

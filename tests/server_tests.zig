@@ -68,7 +68,7 @@ test "server login select search and logout" {
     var server = imap.server.Server.init(std.testing.allocator, &store);
     try server.serveTransport(transport.transport());
 
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL]") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK LOGIN completed") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 EXISTS") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1") != null);
@@ -121,4 +121,27 @@ test "server lsub and idle are supported" {
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* LSUB (\\Subscribed) \"/\" \"INBOX\"") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "+ idling") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A004 OK IDLE completed") != null);
+}
+
+test "server authenticate plain succeeds" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const plain = try imap.auth.plain.initialResponseAlloc(std.testing.allocator, "", "user", "pass");
+    defer std.testing.allocator.free(plain);
+    const script = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "A001 AUTHENTICATE PLAIN\r\n{s}\r\nA002 LOGOUT\r\n",
+        .{plain},
+    );
+    defer std.testing.allocator.free(script);
+
+    var transport = ScriptTransport.init(std.testing.allocator, script);
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK AUTHENTICATE completed") != null);
 }
