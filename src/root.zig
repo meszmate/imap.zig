@@ -50,6 +50,7 @@ pub const NumSet = numset.NumSet;
 
 pub const StatusKind = response.StatusKind;
 pub const StatusResponse = response.StatusResponse;
+pub const response_codes = response.codes;
 pub const parseStatusLine = response.parseStatusLine;
 pub const freeStatus = response.freeStatus;
 

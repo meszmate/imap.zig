@@ -100,3 +100,24 @@ test "client append sends literal payload" {
         scripted.output.items,
     );
 }
+
+test "client idleOnce reads continuation and sends DONE" {
+    var scripted = ScriptTransport.init(
+        std.testing.allocator,
+        "* OK [CAPABILITY IMAP4rev1 IDLE] hi\r\n" ++
+            "+ idling\r\n" ++
+            "* 3 EXISTS\r\n" ++
+            "A0001 OK IDLE completed\r\n",
+    );
+    defer scripted.deinit();
+
+    var client = try imap.client.Client.init(std.testing.allocator, scripted.transport());
+    defer client.deinit();
+
+    const lines = try client.idleOnce();
+    defer client.freeLines(lines);
+
+    try std.testing.expectEqual(@as(usize, 1), lines.len);
+    try std.testing.expectEqualStrings("* 3 EXISTS", lines[0]);
+    try std.testing.expectEqualStrings("A0001 IDLE\r\nDONE\r\n", scripted.output.items);
+}

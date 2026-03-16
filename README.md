@@ -7,9 +7,9 @@
 
 It is designed as a practical foundation for both IMAP tooling and embedded mail services:
 
-- IMAP4rev1-oriented protocol types, status parsing, number set parsing, and modified UTF-7 mailbox handling
-- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `LOGIN`, `SELECT`/`EXAMINE`, `LIST`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, and `LOGOUT`
-- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `NAMESPACE`, `ID`, `LIST`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, and `EXPUNGE`
+- IMAP4rev1-oriented protocol types, status parsing, number set parsing, modified UTF-7 mailbox handling, and a broader registry-backed capability surface
+- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, and `LOGOUT`
+- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, and `EXPUNGE`
 - Transport abstraction for testing, scripting, and custom I/O
 - GitHub Actions CI, examples, and unit tests
 
@@ -24,14 +24,17 @@ Implemented now:
 - In-memory mailbox store and message flag management
 - Sequence-set and UID-set parsing
 - Core command parsing and response generation
+- Basic IDLE flow and `DONE` termination
+- Capability, mailbox attribute, and response-code coverage widened from the current RFC/IANA registry surface
 
 Planned next:
 
 - TLS and STARTTLS helpers
 - SASL/auth mechanism modules
-- IDLE and asynchronous update handling
+- IDLE and asynchronous update broadcasting
 - richer `FETCH`/`BODYSTRUCTURE` parsing
 - extension registry and more RFC extensions
+- IMAP4rev2-specific behavior tightening
 
 ## Installation
 
@@ -132,5 +135,11 @@ The protocol surface and command set were shaped against:
 - [RFC 3501: IMAP4rev1](https://www.rfc-editor.org/rfc/rfc3501.html)
 - [RFC 2177: IDLE](https://www.rfc-editor.org/rfc/rfc2177.html)
 - [RFC 4315: UIDPLUS](https://www.rfc-editor.org/rfc/rfc4315.html)
+- [RFC 2342: NAMESPACE](https://www.rfc-editor.org/rfc/rfc2342.html)
+- [RFC 2971: ID](https://www.rfc-editor.org/rfc/rfc2971.html)
+- [RFC 5161: ENABLE](https://www.rfc-editor.org/rfc/rfc5161.html)
+- [IANA IMAP Capabilities Registry](https://www.iana.org/assignments/imap-capabilities/imap-capabilities.xhtml)
+- [IANA IMAP Response Codes Registry](https://www.iana.org/assignments/imap-response-codes/imap-response-codes.xhtml)
+- [IANA IMAP Mailbox Name Attributes Registry](https://www.iana.org/assignments/imap-mailbox-name-attributes/imap-mailbox-name-attributes.xhtml)
 
 The package structure was also informed by the local `~/imap-go` reference implementation.

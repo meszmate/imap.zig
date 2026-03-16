@@ -85,18 +85,41 @@ pub const Client = struct {
     }
 
     pub fn list(self: *Client, reference: []const u8, pattern: []const u8) ![]imap.ListData {
+        return self.listLike("LIST", reference, pattern);
+    }
+
+    pub fn lsub(self: *Client, reference: []const u8, pattern: []const u8) ![]imap.ListData {
+        return self.listLike("LSUB", reference, pattern);
+    }
+
+    pub fn create(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("CREATE", mailbox);
+    }
+
+    pub fn delete(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("DELETE", mailbox);
+    }
+
+    pub fn subscribe(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("SUBSCRIBE", mailbox);
+    }
+
+    pub fn unsubscribe(self: *Client, mailbox: []const u8) !void {
+        try self.simpleMailboxCommand("UNSUBSCRIBE", mailbox);
+    }
+
+    pub fn rename(self: *Client, mailbox: []const u8, new_mailbox: []const u8) !void {
         var command: std.ArrayList(u8) = .empty;
         defer command.deinit(self.allocator);
         const writer = command.writer(self.allocator);
-        try writer.writeAll("LIST ");
-        try wire.writeQuoted(writer, reference);
+        try writer.writeAll("RENAME ");
+        try wire.writeQuoted(writer, mailbox);
         try writer.writeByte(' ');
-        try wire.writeQuoted(writer, pattern);
+        try wire.writeQuoted(writer, new_mailbox);
 
         var result = try self.runCommand(command.items, null);
         defer result.deinit();
         try self.ensureOk(&result);
-        return parseListData(self.allocator, &result);
     }
 
     pub fn freeListData(self: *Client, items: []imap.ListData) void {
@@ -167,6 +190,90 @@ pub const Client = struct {
         self.allocator.free(lines);
     }
 
+    pub fn namespace(self: *Client) ![][]u8 {
+        var result = try self.runSimple("NAMESPACE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn id(self: *Client, fields: []const [2][]const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("ID ");
+        if (fields.len == 0) {
+            try writer.writeAll("NIL");
+        } else {
+            try writer.writeByte('(');
+            for (fields, 0..) |field, index| {
+                if (index != 0) try writer.writeByte(' ');
+                try wire.writeQuoted(writer, field[0]);
+                try writer.writeByte(' ');
+                try wire.writeQuoted(writer, field[1]);
+            }
+            try writer.writeByte(')');
+        }
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn enable(self: *Client, capabilities: []const []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("ENABLE");
+        for (capabilities) |cap_name| {
+            try writer.writeByte(' ');
+            try writer.writeAll(cap_name);
+        }
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn idleOnce(self: *Client) ![][]u8 {
+        const tag = try self.nextTagString();
+        defer self.allocator.free(tag);
+
+        var line: std.ArrayList(u8) = .empty;
+        defer line.deinit(self.allocator);
+        try line.writer(self.allocator).print("{s} IDLE\r\n", .{tag});
+        try self.transport.writeAll(line.items);
+
+        const cont = try self.reader.readLineAlloc();
+        defer self.allocator.free(cont);
+        if (cont.len == 0 or cont[0] != '+') return error.InvalidIdleContinuation;
+
+        var out: std.ArrayList([]u8) = .empty;
+        errdefer {
+            for (out.items) |item| self.allocator.free(item);
+            out.deinit(self.allocator);
+        }
+
+        while (true) {
+            const response_line = try self.reader.readLineAlloc();
+            errdefer self.allocator.free(response_line);
+            if (std.mem.startsWith(u8, response_line, "* ")) {
+                try out.append(self.allocator, response_line);
+                break;
+            }
+            self.allocator.free(response_line);
+            break;
+        }
+
+        try self.transport.writeAll("DONE\r\n");
+        const done_line = try self.reader.readLineAlloc();
+        defer self.allocator.free(done_line);
+        if (!std.mem.startsWith(u8, done_line, tag)) return error.InvalidIdleCompletion;
+
+        return out.toOwnedSlice(self.allocator);
+    }
+
     fn readGreeting(self: *Client) !void {
         const line = try self.reader.readLineAlloc();
         defer self.allocator.free(line);
@@ -209,6 +316,35 @@ pub const Client = struct {
 
     fn runSimple(self: *Client, command: []const u8) !CommandResult {
         return self.runCommand(command, null);
+    }
+
+    fn listLike(self: *Client, verb: []const u8, reference: []const u8, pattern: []const u8) ![]imap.ListData {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll(verb);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, reference);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, pattern);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseListData(self.allocator, &result);
+    }
+
+    fn simpleMailboxCommand(self: *Client, verb: []const u8, mailbox: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll(verb);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
     }
 
     fn runCommand(self: *Client, command: []const u8, literal: ?[]const u8) !CommandResult {

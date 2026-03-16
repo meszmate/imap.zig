@@ -18,7 +18,7 @@ pub const Server = struct {
         var reader = wire.LineReader.init(self.allocator, transport);
         var session = SessionState{};
 
-        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT] imap.zig ready\r\n");
+        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE] imap.zig ready\r\n");
 
         while (session.state != .logout) {
             const line = reader.readLineAlloc() catch |err| switch (err) {
@@ -50,7 +50,7 @@ pub const Server = struct {
             }
 
             if (std.ascii.eqlIgnoreCase(command_name, imap.commands.capability)) {
-                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT\r\n");
+                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE\r\n");
                 try writeTagged(transport, tag, .ok, null, "CAPABILITY completed");
                 continue;
             }
@@ -113,6 +113,20 @@ pub const Server = struct {
                 }
                 try self.handleList(transport, session.user.?, args[0].value, args[1].value);
                 try writeTagged(transport, tag, .ok, null, "LIST completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.lsub)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "LSUB requires reference and pattern");
+                    continue;
+                }
+                try self.handleLsub(transport, session.user.?, args[0].value, args[1].value);
+                try writeTagged(transport, tag, .ok, null, "LSUB completed");
                 continue;
             }
 
@@ -241,6 +255,30 @@ pub const Server = struct {
                 if (session.user != null) session.state = .authenticated;
                 session.read_only = false;
                 try writeTagged(transport, tag, .ok, null, "UNSELECT completed");
+                continue;
+            }
+
+            if (std.ascii.eqlIgnoreCase(command_name, imap.commands.idle)) {
+                if (session.user == null) {
+                    try writeTagged(transport, tag, .bad, null, "not authenticated");
+                    continue;
+                }
+                try transport.writeAll("+ idling\r\n");
+                if (session.selected) |mailbox| {
+                    try transport.print("* {d} EXISTS\r\n", .{mailbox.messages.items.len});
+                }
+                while (true) {
+                    const idle_line = reader.readLineAlloc() catch |err| switch (err) {
+                        error.EndOfStream => {
+                            session.state = .logout;
+                            return;
+                        },
+                        else => return err,
+                    };
+                    defer self.allocator.free(idle_line);
+                    if (std.ascii.eqlIgnoreCase(std.mem.trim(u8, idle_line, " "), "DONE")) break;
+                }
+                try writeTagged(transport, tag, .ok, null, "IDLE completed");
                 continue;
             }
 
@@ -389,6 +427,20 @@ pub const Server = struct {
             if (mailbox.subscribed) try attrs.appendSlice(self.allocator, "\\Subscribed ");
             const attr_text = if (attrs.items.len == 0) "" else attrs.items[0 .. attrs.items.len - 1];
             try transport.print("* LIST ({s}) \"/\" \"{s}\"\r\n", .{ attr_text, mailbox.name });
+        }
+    }
+
+    fn handleLsub(self: *Server, transport: wire.Transport, user: *memstore.User, _: []const u8, pattern: []const u8) !void {
+        var it = user.mailboxes.iterator();
+        while (it.next()) |entry| {
+            const mailbox = entry.value_ptr.*;
+            if (!mailbox.subscribed) continue;
+            if (!memstore.matchesPattern(mailbox.name, pattern)) continue;
+
+            var attrs = std.ArrayList(u8).empty;
+            defer attrs.deinit(self.allocator);
+            try attrs.appendSlice(self.allocator, "\\Subscribed");
+            try transport.print("* LSUB ({s}) \"/\" \"{s}\"\r\n", .{ attrs.items, mailbox.name });
         }
     }
 
