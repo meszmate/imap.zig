@@ -13,7 +13,10 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 - In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, and `EXPUNGE`
 - Auth namespace with mechanism helpers for `ANONYMOUS`, `CRAM-MD5`, `EXTERNAL`, `LOGIN`, `OAUTHBEARER`, `PLAIN`, and `XOAUTH2`
 - Filesystem-backed store backend in addition to the in-memory reference store
+- Type-erased store backend/user/mailbox interfaces for backend-agnostic integration code
 - Explicit connection state machine and extension registry inspired by the local `~/imap-go` architecture
+- Public middleware chain primitives plus reusable logging, recovery, timeout, rate-limit, and metrics middleware
+- Public server connection/session primitives and a reusable client connection pool
 - Transport abstraction for testing, scripting, and custom I/O
 - GitHub Actions CI, examples, and unit tests
 
@@ -35,6 +38,9 @@ Implemented now:
 - Explicit connection state machine for RFC-style state validation
 - Public auth helpers and working `AUTHENTICATE` support for PLAIN, LOGIN, and EXTERNAL
 - Public wire encoder/decoder primitives
+- Backend-agnostic store interfaces for memstore and fsstore
+- Middleware and server connection/session building blocks for future dispatcher refactors
+- Basic authenticated client pooling with idle reuse
 
 Planned next:
 
@@ -124,11 +130,12 @@ src/wire/              Transport, line reader, modified UTF-7
 src/auth/              SASL/auth mechanism helpers
 src/client/            Synchronous IMAP client
 src/server/            Command dispatcher and TCP server loop
-src/store/             In-memory store backend
+src/store/             In-memory, filesystem, and generic store interfaces
 src/state/             Connection state machine
 src/extension/         Extension metadata and dependency registry
+src/middleware/        Middleware chain and built-in middleware
 examples/              Simple client and server examples
-tests/                 Protocol, client, server, state, and extension tests
+tests/                 Protocol, client, server, store, middleware, state, and extension tests
 ```
 
 ## Development

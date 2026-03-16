@@ -10,6 +10,7 @@ pub const server = @import("server/root.zig");
 pub const state = @import("state/root.zig");
 pub const extension = @import("extension/root.zig");
 pub const auth = @import("auth/root.zig");
+pub const middleware = @import("middleware/root.zig");
 
 pub const ConnState = types.ConnState;
 pub const Flag = types.Flag;

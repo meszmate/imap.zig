@@ -58,6 +58,39 @@ pub const FsStore = struct {
         try writeFile(mailbox_path, "");
     }
 
+    pub fn deleteMailbox(self: *FsStore, username: []const u8, mailbox: []const u8) !void {
+        if (std.ascii.eqlIgnoreCase(mailbox, "INBOX")) return error.CannotDeleteInbox;
+        const mailbox_path = try self.mailboxPathAlloc(username, mailbox);
+        defer self.allocator.free(mailbox_path);
+        std.fs.cwd().deleteFile(mailbox_path) catch |err| switch (err) {
+            error.FileNotFound => return error.NoSuchMailbox,
+            else => return err,
+        };
+    }
+
+    pub fn renameMailbox(self: *FsStore, username: []const u8, old_mailbox: []const u8, new_mailbox: []const u8) !void {
+        const old_path = try self.mailboxPathAlloc(username, old_mailbox);
+        defer self.allocator.free(old_path);
+        const new_path = try self.mailboxPathAlloc(username, new_mailbox);
+        defer self.allocator.free(new_path);
+        if (self.mailboxExists(username, new_mailbox)) return error.MailboxAlreadyExists;
+        std.fs.cwd().rename(old_path, new_path) catch |err| switch (err) {
+            error.FileNotFound => return error.NoSuchMailbox,
+            else => return err,
+        };
+    }
+
+    pub fn mailboxExists(self: *FsStore, username: []const u8, mailbox: []const u8) bool {
+        const mailbox_path = self.mailboxPathAlloc(username, mailbox) catch return false;
+        defer self.allocator.free(mailbox_path);
+        if (std.fs.cwd().openFile(mailbox_path, .{})) |file| {
+            file.close();
+            return true;
+        } else |_| {
+            return false;
+        }
+    }
+
     fn userDirAlloc(self: *FsStore, username: []const u8) ![]u8 {
         return std.fs.path.join(self.allocator, &.{ self.root_path, "users", username });
     }
