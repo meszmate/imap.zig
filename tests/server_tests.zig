@@ -153,35 +153,39 @@ test "server sort thread acl quota metadata" {
 
     const user = try store.authenticate("user", "pass");
     const inbox = user.getMailbox("INBOX").?;
-    _ = try inbox.appendMessage("Subject: Hello\r\n\r\nBody", &.{}, 0);
+    _ = try inbox.appendMessage("Subject: Zebra\r\nMessage-ID: <z1>\r\n\r\nBody", &.{}, 5);
+    _ = try inbox.appendMessage("Subject: alpha\r\nMessage-ID: <a1>\r\nIn-Reply-To: <z1>\r\n\r\nBody", &.{}, 10);
 
     var transport = ScriptTransport.init(
         std.testing.allocator,
         "A001 LOGIN \"user\" \"pass\"\r\n" ++
             "A002 SELECT \"INBOX\"\r\n" ++
-            "A003 SORT (DATE) UTF-8 ALL\r\n" ++
+            "A003 SORT (SUBJECT) UTF-8 ALL\r\n" ++
             "A004 THREAD REFERENCES UTF-8 ALL\r\n" ++
-            "A005 GETACL \"INBOX\"\r\n" ++
-            "A006 MYRIGHTS \"INBOX\"\r\n" ++
-            "A007 GETQUOTA \"\"\r\n" ++
-            "A008 GETQUOTAROOT \"INBOX\"\r\n" ++
-            "A009 GETMETADATA \"INBOX\" (/private/comment)\r\n" ++
-            "A010 SETMETADATA \"INBOX\" (/private/comment \"test\")\r\n" ++
-            "A011 LOGOUT\r\n",
+            "A005 SETACL \"INBOX\" friend lr\r\n" ++
+            "A006 GETACL \"INBOX\"\r\n" ++
+            "A007 MYRIGHTS \"INBOX\"\r\n" ++
+            "A008 SETQUOTA \"\" (STORAGE 2048 MESSAGE 25)\r\n" ++
+            "A009 GETQUOTA \"\"\r\n" ++
+            "A010 GETQUOTAROOT \"INBOX\"\r\n" ++
+            "A011 SETMETADATA \"INBOX\" (/private/comment \"test\")\r\n" ++
+            "A012 GETMETADATA \"INBOX\" (/private/comment)\r\n" ++
+            "A013 LOGOUT\r\n",
     );
     defer transport.deinit();
 
     var server = imap.server.Server.init(std.testing.allocator, &store);
     try server.serveTransport(transport.transport());
 
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SORT 1") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* THREAD (1)") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* ACL") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SORT 2 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* THREAD (1 (2))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* ACL INBOX user lrswipdkxtea friend lr") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* MYRIGHTS") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTA") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTA \"\" (STORAGE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "MESSAGE 2 25") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTAROOT") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A009 OK GETMETADATA completed") != null);
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A010 OK SETMETADATA completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* METADATA INBOX (\"/private/comment\" \"test\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A012 OK GETMETADATA completed") != null);
 }
 
 test "server starttls compress unauthenticate" {

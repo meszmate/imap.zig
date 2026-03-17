@@ -363,15 +363,21 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "SORT requires selected state");
                     continue;
                 }
-                // Basic SORT: return messages in sequence order as stub
                 const mailbox = session.selected.?;
-                var ids_buf: std.ArrayList(u8) = .empty;
-                defer ids_buf.deinit(self.allocator);
-                for (mailbox.messages.items, 0..) |_, idx| {
-                    if (idx != 0) try ids_buf.writer(self.allocator).writeByte(' ');
-                    try std.fmt.format(ids_buf.writer(self.allocator), "{d}", .{idx + 1});
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "SORT requires criteria and charset");
+                    continue;
                 }
-                try transport.print("* SORT {s}\r\n", .{ids_buf.items});
+                const criteria = try parseSortCriteria(self.allocator, args[0]);
+                defer self.allocator.free(criteria);
+                var search_criteria = try parseSearchCriteria(self.allocator, args[2..]);
+                defer freeSearchCriteria(self.allocator, &search_criteria);
+                const sorted = try sortMailbox(self.allocator, mailbox, uid_mode, criteria, search_criteria);
+                defer self.allocator.free(sorted);
+
+                const ids_buf = try joinU32sSpace(self.allocator, sorted);
+                defer self.allocator.free(ids_buf);
+                try transport.print("* SORT {s}\r\n", .{ids_buf});
                 try writeTagged(transport, tag, .ok, null, "SORT completed");
                 continue;
             }
@@ -381,14 +387,20 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "THREAD requires selected state");
                     continue;
                 }
-                // Basic THREAD stub: each message is its own thread
                 const mailbox = session.selected.?;
-                var thread_buf: std.ArrayList(u8) = .empty;
-                defer thread_buf.deinit(self.allocator);
-                for (mailbox.messages.items, 0..) |_, idx| {
-                    try std.fmt.format(thread_buf.writer(self.allocator), "({d})", .{idx + 1});
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "THREAD requires algorithm and charset");
+                    continue;
                 }
-                try transport.print("* THREAD {s}\r\n", .{thread_buf.items});
+                const algorithm = if (std.ascii.eqlIgnoreCase(args[0].value, "REFERENCES"))
+                    imap.ThreadAlgorithm.references
+                else
+                    imap.ThreadAlgorithm.orderedsubject;
+                var search_criteria = try parseSearchCriteria(self.allocator, args[2..]);
+                defer freeSearchCriteria(self.allocator, &search_criteria);
+                const thread_text = try threadMailbox(self.allocator, mailbox, uid_mode, algorithm, search_criteria);
+                defer self.allocator.free(thread_text);
+                try transport.print("* THREAD {s}\r\n", .{thread_text});
                 try writeTagged(transport, tag, .ok, null, "THREAD completed");
                 continue;
             }
@@ -402,8 +414,11 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "GETACL requires mailbox");
                     continue;
                 }
-                // Return full rights for the authenticated user
-                try transport.print("* ACL {s} {s} lrswipdkxtea\r\n", .{ args[0].value, session.user.?.username });
+                const mailbox = session.user.?.getMailbox(args[0].value) orelse {
+                    try writeTagged(transport, tag, .no, null, "no such mailbox");
+                    continue;
+                };
+                try self.writeAclData(transport, mailbox, session.user.?);
                 try writeTagged(transport, tag, .ok, null, "GETACL completed");
                 continue;
             }
@@ -417,7 +432,11 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "SETACL requires mailbox, identifier, rights");
                     continue;
                 }
-                // Accept silently (stub)
+                const mailbox = session.user.?.getMailbox(args[0].value) orelse {
+                    try writeTagged(transport, tag, .no, null, "no such mailbox");
+                    continue;
+                };
+                try mailbox.setAcl(args[1].value, args[2].value);
                 try writeTagged(transport, tag, .ok, null, "SETACL completed");
                 continue;
             }
@@ -431,6 +450,11 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "DELETEACL requires mailbox and identifier");
                     continue;
                 }
+                const mailbox = session.user.?.getMailbox(args[0].value) orelse {
+                    try writeTagged(transport, tag, .no, null, "no such mailbox");
+                    continue;
+                };
+                _ = mailbox.deleteAcl(args[1].value);
                 try writeTagged(transport, tag, .ok, null, "DELETEACL completed");
                 continue;
             }
@@ -444,7 +468,7 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "LISTRIGHTS requires mailbox and identifier");
                     continue;
                 }
-                try transport.print("* LISTRIGHTS {s} {s} lrswipdkxtea\r\n", .{ args[0].value, args[1].value });
+                try transport.print("* LISTRIGHTS {s} {s} \"\" l r s w i p k x t e a\r\n", .{ args[0].value, args[1].value });
                 try writeTagged(transport, tag, .ok, null, "LISTRIGHTS completed");
                 continue;
             }
@@ -458,7 +482,11 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "MYRIGHTS requires mailbox");
                     continue;
                 }
-                try transport.print("* MYRIGHTS {s} lrswipdkxtea\r\n", .{args[0].value});
+                const mailbox = session.user.?.getMailbox(args[0].value) orelse {
+                    try writeTagged(transport, tag, .no, null, "no such mailbox");
+                    continue;
+                };
+                try transport.print("* MYRIGHTS {s} {s}\r\n", .{ args[0].value, mailbox.getRights(session.user.?.username, session.user.?.username) });
                 try writeTagged(transport, tag, .ok, null, "MYRIGHTS completed");
                 continue;
             }
@@ -472,7 +500,7 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "GETQUOTA requires root");
                     continue;
                 }
-                try transport.print("* QUOTA {s} (STORAGE 0 1048576)\r\n", .{args[0].value});
+                try self.writeQuota(transport, session.user.?);
                 try writeTagged(transport, tag, .ok, null, "GETQUOTA completed");
                 continue;
             }
@@ -481,6 +509,9 @@ pub const Server = struct {
                 if (session.user == null) {
                     try writeTagged(transport, tag, .bad, null, "not authenticated");
                     continue;
+                }
+                if (args.len >= 2) {
+                    try applyQuotaResources(session.user.?, args[1]);
                 }
                 try writeTagged(transport, tag, .ok, null, "SETQUOTA completed");
                 continue;
@@ -495,8 +526,8 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "GETQUOTAROOT requires mailbox");
                     continue;
                 }
-                try transport.print("* QUOTAROOT {s} \"\"\r\n", .{args[0].value});
-                try transport.writeAll("* QUOTA \"\" (STORAGE 0 1048576)\r\n");
+                try transport.print("* QUOTAROOT {s} \"{s}\"\r\n", .{ args[0].value, session.user.?.quota_root });
+                try self.writeQuota(transport, session.user.?);
                 try writeTagged(transport, tag, .ok, null, "GETQUOTAROOT completed");
                 continue;
             }
@@ -510,8 +541,11 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "GETMETADATA requires mailbox");
                     continue;
                 }
-                // Return empty metadata
-                try transport.print("* METADATA {s}\r\n", .{args[0].value});
+                const mailbox = session.user.?.getMailbox(args[0].value) orelse {
+                    try writeTagged(transport, tag, .no, null, "no such mailbox");
+                    continue;
+                };
+                try self.writeMetadata(transport, mailbox, if (args.len >= 2) args[1] else null);
                 try writeTagged(transport, tag, .ok, null, "GETMETADATA completed");
                 continue;
             }
@@ -521,7 +555,15 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "not authenticated");
                     continue;
                 }
-                // Accept silently (stub)
+                if (args.len < 2) {
+                    try writeTagged(transport, tag, .bad, null, "SETMETADATA requires mailbox and entries");
+                    continue;
+                }
+                const mailbox = session.user.?.getMailbox(args[0].value) orelse {
+                    try writeTagged(transport, tag, .no, null, "no such mailbox");
+                    continue;
+                };
+                try applyMetadataUpdates(self.allocator, mailbox, args[1]);
                 try writeTagged(transport, tag, .ok, null, "SETMETADATA completed");
                 continue;
             }
@@ -823,7 +865,7 @@ pub const Server = struct {
             try matches.append(self.allocator, if (uid_mode) message.uid else @as(u32, @intCast(index + 1)));
         }
 
-        const joined = try joinU32s(self.allocator, matches.items);
+        const joined = try joinU32sSpace(self.allocator, matches.items);
         defer self.allocator.free(joined);
         if (joined.len == 0) {
             try transport.writeAll("* SEARCH\r\n");
@@ -899,6 +941,72 @@ pub const Server = struct {
             }
         }
         _ = self;
+    }
+
+    fn writeAclData(self: *Server, transport: wire.Transport, mailbox: *memstore.Mailbox, user: *memstore.User) !void {
+        _ = self;
+        try transport.print("* ACL {s} {s} lrswipdkxtea", .{ mailbox.name, user.username });
+        var it = mailbox.acl.iterator();
+        while (it.next()) |entry| {
+            try transport.print(" {s} {s}", .{ entry.key_ptr.*, entry.value_ptr.* });
+        }
+        try transport.writeAll("\r\n");
+    }
+
+    fn writeQuota(self: *Server, transport: wire.Transport, user: *memstore.User) !void {
+        _ = self;
+        try transport.print(
+            "* QUOTA \"{s}\" (STORAGE {d} {d} MESSAGE {d} {d})\r\n",
+            .{
+                user.quota_root,
+                user.quotaStorageUsage(),
+                user.quota_storage_limit,
+                user.quotaMessageUsage(),
+                user.quota_message_limit,
+            },
+        );
+    }
+
+    fn writeMetadata(self: *Server, transport: wire.Transport, mailbox: *memstore.Mailbox, requested: ?Token) !void {
+        try transport.print("* METADATA {s} (", .{mailbox.name});
+        var first = true;
+
+        if (requested) |token| {
+            var items = try tokenizeLine(self.allocator, token.value);
+            defer items.deinit(self.allocator);
+            for (items.items) |item| {
+                if (!first) try transport.writeAll(" ");
+                first = false;
+                try transport.print("\"{s}\" ", .{item.value});
+                if (mailbox.metadata.get(item.value)) |value_opt| {
+                    if (value_opt) |value| {
+                        const escaped = try escapeForQuoted(self.allocator, value);
+                        defer self.allocator.free(escaped);
+                        try transport.print("\"{s}\"", .{escaped});
+                    } else {
+                        try transport.writeAll("NIL");
+                    }
+                } else {
+                    try transport.writeAll("NIL");
+                }
+            }
+        } else {
+            var it = mailbox.metadata.iterator();
+            while (it.next()) |entry| {
+                if (!first) try transport.writeAll(" ");
+                first = false;
+                try transport.print("\"{s}\" ", .{entry.key_ptr.*});
+                if (entry.value_ptr.*) |value| {
+                    const escaped = try escapeForQuoted(self.allocator, value);
+                    defer self.allocator.free(escaped);
+                    try transport.print("\"{s}\"", .{escaped});
+                } else {
+                    try transport.writeAll("NIL");
+                }
+            }
+        }
+
+        try transport.writeAll(")\r\n");
     }
 };
 
@@ -1178,6 +1286,249 @@ fn messageMatches(message: memstore.Message, criteria: imap.SearchCriteria) bool
     return true;
 }
 
+fn parseSortCriteria(allocator: std.mem.Allocator, token: Token) ![]imap.SortCriterion {
+    if (token.kind != .group) return error.InvalidSortCriteria;
+    var pieces = try tokenizeLine(allocator, token.value);
+    defer pieces.deinit(allocator);
+
+    var out: std.ArrayList(imap.SortCriterion) = .empty;
+    errdefer out.deinit(allocator);
+
+    var index: usize = 0;
+    while (index < pieces.items.len) : (index += 1) {
+        var criterion = imap.SortCriterion{};
+        if (std.ascii.eqlIgnoreCase(pieces.items[index].value, "REVERSE")) {
+            criterion.reverse = true;
+            index += 1;
+            if (index >= pieces.items.len) return error.InvalidSortCriteria;
+        }
+
+        criterion.key = parseSortKey(pieces.items[index].value) orelse return error.InvalidSortCriteria;
+        try out.append(allocator, criterion);
+    }
+
+    return out.toOwnedSlice(allocator);
+}
+
+fn parseSortKey(value: []const u8) ?imap.SortKey {
+    if (std.ascii.eqlIgnoreCase(value, "ARRIVAL")) return .arrival;
+    if (std.ascii.eqlIgnoreCase(value, "CC")) return .cc;
+    if (std.ascii.eqlIgnoreCase(value, "DATE")) return .date;
+    if (std.ascii.eqlIgnoreCase(value, "FROM")) return .from;
+    if (std.ascii.eqlIgnoreCase(value, "SIZE")) return .size;
+    if (std.ascii.eqlIgnoreCase(value, "SUBJECT")) return .subject;
+    if (std.ascii.eqlIgnoreCase(value, "TO")) return .to;
+    if (std.ascii.eqlIgnoreCase(value, "DISPLAYFROM")) return .display_from;
+    if (std.ascii.eqlIgnoreCase(value, "DISPLAYTO")) return .display_to;
+    return null;
+}
+
+fn sortMailbox(allocator: std.mem.Allocator, mailbox: *memstore.Mailbox, uid_mode: bool, criteria: []const imap.SortCriterion, search: imap.SearchCriteria) ![]u32 {
+    var indices: std.ArrayList(usize) = .empty;
+    defer indices.deinit(allocator);
+    for (mailbox.messages.items, 0..) |message, index| {
+        if (messageMatches(message, search)) try indices.append(allocator, index);
+    }
+
+    var i: usize = 0;
+    while (i < indices.items.len) : (i += 1) {
+        var j: usize = i + 1;
+        while (j < indices.items.len) : (j += 1) {
+            if (compareMessages(mailbox, indices.items[i], indices.items[j], criteria) > 0) {
+                const tmp = indices.items[i];
+                indices.items[i] = indices.items[j];
+                indices.items[j] = tmp;
+            }
+        }
+    }
+
+    const ids = try allocator.alloc(u32, indices.items.len);
+    for (indices.items, 0..) |index, out_index| {
+        ids[out_index] = if (uid_mode) mailbox.messages.items[index].uid else @as(u32, @intCast(index + 1));
+    }
+    return ids;
+}
+
+fn compareMessages(mailbox: *memstore.Mailbox, left_index: usize, right_index: usize, criteria: []const imap.SortCriterion) i32 {
+    const left = mailbox.messages.items[left_index];
+    const right = mailbox.messages.items[right_index];
+    for (criteria) |criterion| {
+        var cmp = compareByKey(left, right, criterion.key);
+        if (criterion.reverse) cmp = -cmp;
+        if (cmp != 0) return cmp;
+    }
+    return compareU32(@as(u32, @intCast(left_index)), @as(u32, @intCast(right_index)));
+}
+
+fn compareByKey(left: memstore.Message, right: memstore.Message, key: imap.SortKey) i32 {
+    return switch (key) {
+        .arrival, .date => compareU64(left.internal_date_unix, right.internal_date_unix),
+        .size => compareU64(left.body.len, right.body.len),
+        .subject => compareText(extractHeader(left.body, "Subject"), extractHeader(right.body, "Subject")),
+        .from, .display_from => compareText(extractHeader(left.body, "From"), extractHeader(right.body, "From")),
+        .to, .display_to => compareText(extractHeader(left.body, "To"), extractHeader(right.body, "To")),
+        .cc => compareText(extractHeader(left.body, "Cc"), extractHeader(right.body, "Cc")),
+    };
+}
+
+fn threadMailbox(allocator: std.mem.Allocator, mailbox: *memstore.Mailbox, uid_mode: bool, algorithm: imap.ThreadAlgorithm, search: imap.SearchCriteria) ![]u8 {
+    var included: std.ArrayList(usize) = .empty;
+    defer included.deinit(allocator);
+    for (mailbox.messages.items, 0..) |message, index| {
+        if (messageMatches(message, search)) try included.append(allocator, index);
+    }
+
+    return switch (algorithm) {
+        .orderedsubject => threadBySubject(allocator, mailbox, included.items, uid_mode),
+        .references => threadByReferences(allocator, mailbox, included.items, uid_mode),
+    };
+}
+
+fn threadBySubject(allocator: std.mem.Allocator, mailbox: *memstore.Mailbox, indices: []const usize, uid_mode: bool) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var used = try allocator.alloc(bool, indices.len);
+    defer allocator.free(used);
+    @memset(used, false);
+
+    for (indices, 0..) |index, outer| {
+        if (used[outer]) continue;
+        used[outer] = true;
+        const subject = normalizeSubject(extractHeader(mailbox.messages.items[index].body, "Subject"));
+        try out.append(allocator, '(');
+        try appendThreadId(out.writer(allocator), mailbox, index, uid_mode);
+        for (indices[outer + 1 ..], outer + 1..) |other_index, inner| {
+            const other_subject = normalizeSubject(extractHeader(mailbox.messages.items[other_index].body, "Subject"));
+            if (!std.ascii.eqlIgnoreCase(subject, other_subject)) continue;
+            used[inner] = true;
+            try out.append(allocator, ' ');
+            try appendThreadId(out.writer(allocator), mailbox, other_index, uid_mode);
+        }
+        try out.append(allocator, ')');
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn threadByReferences(allocator: std.mem.Allocator, mailbox: *memstore.Mailbox, indices: []const usize, uid_mode: bool) ![]u8 {
+    var message_ids = std.StringHashMap(usize).init(allocator);
+    defer {
+        var it = message_ids.iterator();
+        while (it.next()) |entry| allocator.free(entry.key_ptr.*);
+        message_ids.deinit();
+    }
+
+    for (indices) |index| {
+        const message_id = extractHeader(mailbox.messages.items[index].body, "Message-ID");
+        if (message_id.len == 0) continue;
+        try message_ids.put(try allocator.dupe(u8, message_id), index);
+    }
+
+    const parent = try allocator.alloc(?usize, mailbox.messages.items.len);
+    defer allocator.free(parent);
+    @memset(parent, null);
+    for (indices) |index| {
+        const refs = extractHeader(mailbox.messages.items[index].body, "References");
+        const reply_to = extractHeader(mailbox.messages.items[index].body, "In-Reply-To");
+        const candidate = if (refs.len != 0) lastReference(refs) else reply_to;
+        if (candidate.len == 0) continue;
+        parent[index] = message_ids.get(candidate);
+    }
+
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var first = true;
+    for (indices) |index| {
+        if (parent[index] != null) continue;
+        if (!first) try out.append(allocator, ' ');
+        first = false;
+        try renderThreadNode(out.writer(allocator), mailbox, indices, parent, index, uid_mode);
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn renderThreadNode(writer: anytype, mailbox: *memstore.Mailbox, indices: []const usize, parent: []const ?usize, current: usize, uid_mode: bool) !void {
+    try writer.writeByte('(');
+    try appendThreadId(writer, mailbox, current, uid_mode);
+    for (indices) |candidate| {
+        if (parent[candidate] != current) continue;
+        try writer.writeByte(' ');
+        try renderThreadNode(writer, mailbox, indices, parent, candidate, uid_mode);
+    }
+    try writer.writeByte(')');
+}
+
+fn appendThreadId(writer: anytype, mailbox: *memstore.Mailbox, index: usize, uid_mode: bool) !void {
+    try std.fmt.format(writer, "{d}", .{if (uid_mode) mailbox.messages.items[index].uid else index + 1});
+}
+
+fn normalizeSubject(subject: []const u8) []const u8 {
+    var value = std.mem.trim(u8, subject, " \t");
+    while (value.len >= 3 and std.ascii.eqlIgnoreCase(value[0..3], "Re:")) {
+        value = std.mem.trim(u8, value[3..], " \t");
+    }
+    return value;
+}
+
+fn lastReference(refs: []const u8) []const u8 {
+    var it = std.mem.tokenizeAny(u8, refs, " \t");
+    var last: []const u8 = "";
+    while (it.next()) |item| last = item;
+    return last;
+}
+
+fn applyQuotaResources(user: *memstore.User, token: Token) !void {
+    if (token.kind != .group) return error.InvalidQuotaResources;
+    var items = try tokenizeLine(user.allocator, token.value);
+    defer items.deinit(user.allocator);
+    var index: usize = 0;
+    while (index + 1 < items.items.len) : (index += 2) {
+        const resource = items.items[index].value;
+        const limit = try std.fmt.parseInt(u64, items.items[index + 1].value, 10);
+        if (std.ascii.eqlIgnoreCase(resource, "STORAGE")) user.quota_storage_limit = limit;
+        if (std.ascii.eqlIgnoreCase(resource, "MESSAGE")) user.quota_message_limit = limit;
+    }
+}
+
+fn applyMetadataUpdates(allocator: std.mem.Allocator, mailbox: *memstore.Mailbox, token: Token) !void {
+    if (token.kind != .group) return error.InvalidMetadata;
+    var items = try tokenizeLine(allocator, token.value);
+    defer items.deinit(allocator);
+    var index: usize = 0;
+    while (index + 1 < items.items.len) : (index += 2) {
+        const name = items.items[index].value;
+        const value = items.items[index + 1].value;
+        if (std.ascii.eqlIgnoreCase(value, "NIL")) {
+            _ = mailbox.removeMetadata(name);
+        } else {
+            try mailbox.setMetadata(name, value);
+        }
+    }
+}
+
+fn compareText(left: []const u8, right: []const u8) i32 {
+    const len = @min(left.len, right.len);
+    var index: usize = 0;
+    while (index < len) : (index += 1) {
+        const a = std.ascii.toLower(left[index]);
+        const b = std.ascii.toLower(right[index]);
+        if (a < b) return -1;
+        if (a > b) return 1;
+    }
+    return compareU64(left.len, right.len);
+}
+
+fn compareU64(left: u64, right: u64) i32 {
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+}
+
+fn compareU32(left: u32, right: u32) i32 {
+    if (left < right) return -1;
+    if (left > right) return 1;
+    return 0;
+}
+
 fn extractHeader(body: []const u8, header_name: []const u8) []const u8 {
     var it = std.mem.splitSequence(u8, body, "\r\n");
     while (it.next()) |line| {
@@ -1220,14 +1571,24 @@ fn joinUids(allocator: std.mem.Allocator, values: []const imap.UID) ![]u8 {
     var converted = try allocator.alloc(u32, values.len);
     defer allocator.free(converted);
     for (values, 0..) |value, index| converted[index] = value;
-    return joinU32s(allocator, converted);
+    return joinU32sCsv(allocator, converted);
 }
 
-fn joinU32s(allocator: std.mem.Allocator, values: []const u32) ![]u8 {
+fn joinU32sCsv(allocator: std.mem.Allocator, values: []const u32) ![]u8 {
     var out: std.ArrayList(u8) = .empty;
     errdefer out.deinit(allocator);
     for (values, 0..) |value, index| {
         if (index != 0) try out.append(allocator, ',');
+        try std.fmt.format(out.writer(allocator), "{d}", .{value});
+    }
+    return out.toOwnedSlice(allocator);
+}
+
+fn joinU32sSpace(allocator: std.mem.Allocator, values: []const u32) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    for (values, 0..) |value, index| {
+        if (index != 0) try out.append(allocator, ' ');
         try std.fmt.format(out.writer(allocator), "{d}", .{value});
     }
     return out.toOwnedSlice(allocator);

@@ -52,6 +52,8 @@ pub const Mailbox = struct {
     uid_validity: u32,
     next_uid: imap.UID = 1,
     messages: std.ArrayList(Message) = .empty,
+    acl: std.StringHashMap([]u8),
+    metadata: std.StringHashMap(?[]u8),
 
     pub fn init(allocator: std.mem.Allocator, name: []const u8, uid_validity: u32) !*Mailbox {
         const mailbox = try allocator.create(Mailbox);
@@ -59,6 +61,8 @@ pub const Mailbox = struct {
             .allocator = allocator,
             .name = try allocator.dupe(u8, name),
             .uid_validity = uid_validity,
+            .acl = std.StringHashMap([]u8).init(allocator),
+            .metadata = std.StringHashMap(?[]u8).init(allocator),
         };
         return mailbox;
     }
@@ -68,6 +72,18 @@ pub const Mailbox = struct {
             message.deinit(self.allocator);
         }
         self.messages.deinit(self.allocator);
+        var acl_it = self.acl.iterator();
+        while (acl_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            self.allocator.free(entry.value_ptr.*);
+        }
+        self.acl.deinit();
+        var metadata_it = self.metadata.iterator();
+        while (metadata_it.next()) |entry| {
+            self.allocator.free(entry.key_ptr.*);
+            if (entry.value_ptr.*) |value| self.allocator.free(value);
+        }
+        self.metadata.deinit();
         self.allocator.free(self.name);
         self.allocator.destroy(self);
     }
@@ -110,6 +126,45 @@ pub const Mailbox = struct {
             imap.flags.draft,
         };
     }
+
+    pub fn setAcl(self: *Mailbox, identifier: []const u8, rights: []const u8) !void {
+        const entry = try self.acl.getOrPut(identifier);
+        if (!entry.found_existing) {
+            entry.key_ptr.* = try self.allocator.dupe(u8, identifier);
+        } else {
+            self.allocator.free(entry.value_ptr.*);
+        }
+        entry.value_ptr.* = try self.allocator.dupe(u8, rights);
+    }
+
+    pub fn deleteAcl(self: *Mailbox, identifier: []const u8) bool {
+        const removed = self.acl.fetchRemove(identifier) orelse return false;
+        self.allocator.free(removed.key);
+        self.allocator.free(removed.value);
+        return true;
+    }
+
+    pub fn getRights(self: *const Mailbox, owner_username: []const u8, identifier: []const u8) []const u8 {
+        if (std.mem.eql(u8, owner_username, identifier)) return "lrswipdkxtea";
+        return self.acl.get(identifier) orelse "";
+    }
+
+    pub fn setMetadata(self: *Mailbox, entry_name: []const u8, value: ?[]const u8) !void {
+        const entry = try self.metadata.getOrPut(entry_name);
+        if (!entry.found_existing) {
+            entry.key_ptr.* = try self.allocator.dupe(u8, entry_name);
+        } else if (entry.value_ptr.*) |existing| {
+            self.allocator.free(existing);
+        }
+        entry.value_ptr.* = if (value) |present| try self.allocator.dupe(u8, present) else null;
+    }
+
+    pub fn removeMetadata(self: *Mailbox, entry_name: []const u8) bool {
+        const removed = self.metadata.fetchRemove(entry_name) orelse return false;
+        self.allocator.free(removed.key);
+        if (removed.value) |value| self.allocator.free(value);
+        return true;
+    }
 };
 
 pub const User = struct {
@@ -117,6 +172,9 @@ pub const User = struct {
     username: []u8,
     password: []u8,
     mailboxes: std.StringHashMap(*Mailbox),
+    quota_root: []u8,
+    quota_storage_limit: u64 = 1_048_576,
+    quota_message_limit: u64 = 0,
 
     pub fn init(allocator: std.mem.Allocator, username: []const u8, password: []const u8, uid_seed: *u32) !*User {
         const user = try allocator.create(User);
@@ -125,6 +183,7 @@ pub const User = struct {
             .username = try allocator.dupe(u8, username),
             .password = try allocator.dupe(u8, password),
             .mailboxes = std.StringHashMap(*Mailbox).init(allocator),
+            .quota_root = try allocator.dupe(u8, ""),
         };
         try user.createMailbox("INBOX", uid_seed);
         return user;
@@ -138,6 +197,7 @@ pub const User = struct {
         self.mailboxes.deinit();
         self.allocator.free(self.username);
         self.allocator.free(self.password);
+        self.allocator.free(self.quota_root);
         self.allocator.destroy(self);
     }
 
@@ -164,6 +224,24 @@ pub const User = struct {
 
     pub fn getMailbox(self: *User, name: []const u8) ?*Mailbox {
         return self.mailboxes.get(name);
+    }
+
+    pub fn quotaStorageUsage(self: *const User) u64 {
+        var total: u64 = 0;
+        var it = self.mailboxes.iterator();
+        while (it.next()) |entry| {
+            for (entry.value_ptr.*.messages.items) |message| total += message.body.len;
+        }
+        return total;
+    }
+
+    pub fn quotaMessageUsage(self: *const User) u64 {
+        var total: u64 = 0;
+        var it = self.mailboxes.iterator();
+        while (it.next()) |entry| {
+            total += entry.value_ptr.*.messages.items.len;
+        }
+        return total;
     }
 };
 
