@@ -68,7 +68,7 @@ test "server login select search and logout" {
     var server = imap.server.Server.init(std.testing.allocator, &store);
     try server.serveTransport(transport.transport());
 
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE SASL-IR AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL AUTH=CRAM-MD5 AUTH=XOAUTH2 AUTH=OAUTHBEARER AUTH=ANONYMOUS SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE]") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK LOGIN completed") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 EXISTS") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1") != null);
@@ -144,6 +144,34 @@ test "server authenticate plain succeeds" {
     try server.serveTransport(transport.transport());
 
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK AUTHENTICATE completed") != null);
+}
+
+test "server authenticate cram md5 and xoauth2 succeed" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const cram = try imap.auth.crammd5.responseAlloc(std.testing.allocator, "user", "pass", "PGltYXAuemlnQGxvY2FsaG9zdD4=");
+    defer std.testing.allocator.free(cram);
+    const xoauth = try imap.auth.xoauth2.initialResponseAlloc(std.testing.allocator, "user", "pass");
+    defer std.testing.allocator.free(xoauth);
+
+    const script = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "A001 AUTHENTICATE CRAM-MD5\r\n{s}\r\nA002 UNAUTHENTICATE\r\nA003 AUTHENTICATE XOAUTH2\r\n{s}\r\nA004 LOGOUT\r\n",
+        .{ cram, xoauth },
+    );
+    defer std.testing.allocator.free(script);
+
+    var transport = ScriptTransport.init(std.testing.allocator, script);
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "+ PGltYXAuemlnQGxvY2FsaG9zdD4=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK AUTHENTICATE completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A003 OK AUTHENTICATE completed") != null);
 }
 
 test "server sort thread acl quota metadata" {

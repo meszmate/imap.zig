@@ -78,28 +78,28 @@ pub const Client = struct {
     }
 
     pub fn authenticatePlain(self: *Client, username: []const u8, password: []const u8) !void {
-        var result = try self.runAuthenticate("PLAIN", null);
-        defer result.deinit();
+        var start = try self.runAuthenticate("PLAIN", null);
+        defer start.deinit();
         const response = try auth.plain.initialResponseAlloc(self.allocator, "", username, password);
         defer self.allocator.free(response);
         try self.transport.writeAll(response);
         try self.transport.writeAll("\r\n");
-        try self.finishAuthenticate(&result);
+        try self.finishAuthenticate(&start.result);
     }
 
     pub fn authenticateExternal(self: *Client, authzid: []const u8) !void {
-        var result = try self.runAuthenticate("EXTERNAL", null);
-        defer result.deinit();
+        var start = try self.runAuthenticate("EXTERNAL", null);
+        defer start.deinit();
         const response = try auth.external.initialResponseAlloc(self.allocator, authzid);
         defer self.allocator.free(response);
         try self.transport.writeAll(response);
         try self.transport.writeAll("\r\n");
-        try self.finishAuthenticate(&result);
+        try self.finishAuthenticate(&start.result);
     }
 
     pub fn authenticateLogin(self: *Client, username: []const u8, password: []const u8) !void {
-        var result = try self.runAuthenticate("LOGIN", null);
-        defer result.deinit();
+        var start = try self.runAuthenticate("LOGIN", null);
+        defer start.deinit();
         const user_b64 = try auth.login.encodeAlloc(self.allocator, username);
         defer self.allocator.free(user_b64);
         try self.transport.writeAll(user_b64);
@@ -111,7 +111,47 @@ pub const Client = struct {
         defer self.allocator.free(pass_b64);
         try self.transport.writeAll(pass_b64);
         try self.transport.writeAll("\r\n");
-        try self.finishAuthenticate(&result);
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateAnonymous(self: *Client, trace: []const u8) !void {
+        var start = try self.runAuthenticate("ANONYMOUS", null);
+        defer start.deinit();
+        const response = try auth.anonymous.initialResponseAlloc(self.allocator, trace);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateCramMd5(self: *Client, username: []const u8, password: []const u8) !void {
+        var start = try self.runAuthenticate("CRAM-MD5", null);
+        defer start.deinit();
+        const response = try auth.crammd5.responseAlloc(self.allocator, username, password, std.mem.trim(u8, start.continuation, " "));
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateXOAuth2(self: *Client, user: []const u8, access_token: []const u8) !void {
+        var start = try self.runAuthenticate("XOAUTH2", null);
+        defer start.deinit();
+        const response = try auth.xoauth2.initialResponseAlloc(self.allocator, user, access_token);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateOAuthBearer(self: *Client, user: []const u8, access_token: []const u8, host: ?[]const u8, port: ?u16) !void {
+        var start = try self.runAuthenticate("OAUTHBEARER", null);
+        defer start.deinit();
+        const response = try auth.oauthbearer.initialResponseAlloc(self.allocator, user, access_token, host, port);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
     }
 
     pub fn select(self: *Client, mailbox: []const u8) !imap.SelectData {
@@ -617,7 +657,7 @@ pub const Client = struct {
         return self.runCommand(command, null);
     }
 
-    fn runAuthenticate(self: *Client, mechanism: []const u8, initial: ?[]const u8) !CommandResult {
+    fn runAuthenticate(self: *Client, mechanism: []const u8, initial: ?[]const u8) !AuthenticateStart {
         var command: std.ArrayList(u8) = .empty;
         defer command.deinit(self.allocator);
         const writer = command.writer(self.allocator);
@@ -640,10 +680,15 @@ pub const Client = struct {
             defer self.allocator.free(cont);
             return error.InvalidAuthenticateContinuation;
         }
-        self.allocator.free(cont);
-        return CommandResult{
+        const trimmed = std.mem.trimLeft(u8, if (cont.len > 1) cont[1..] else "", " ");
+        defer self.allocator.free(cont);
+        return AuthenticateStart{
             .allocator = self.allocator,
-            .tagged = .{ .kind = .bad, .tag = try self.allocator.dupe(u8, tag), .text = &.{} },
+            .continuation = try self.allocator.dupe(u8, trimmed),
+            .result = .{
+                .allocator = self.allocator,
+                .tagged = .{ .kind = .bad, .tag = try self.allocator.dupe(u8, tag), .text = &.{} },
+            },
         };
     }
 
@@ -776,6 +821,18 @@ pub const CommandResult = struct {
                 imap.freeStatus(self.allocator, &self.tagged);
             }
         }
+    }
+};
+
+const AuthenticateStart = struct {
+    allocator: std.mem.Allocator,
+    continuation: []u8,
+    result: CommandResult,
+
+    fn deinit(self: *AuthenticateStart) void {
+        self.allocator.free(self.continuation);
+        self.result.deinit();
+        self.* = undefined;
     }
 };
 

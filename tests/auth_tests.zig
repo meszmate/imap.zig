@@ -27,3 +27,34 @@ test "cram md5 produces base64 response" {
     defer std.testing.allocator.free(response);
     try std.testing.expect(response.len > 10);
 }
+
+test "xoauth2 decodes bearer response" {
+    const encoded = try imap.auth.xoauth2.initialResponseAlloc(std.testing.allocator, "user", "token");
+    defer std.testing.allocator.free(encoded);
+
+    const decoded = try imap.auth.xoauth2.decodeAlloc(std.testing.allocator, encoded);
+    defer {
+        std.testing.allocator.free(decoded.user);
+        std.testing.allocator.free(decoded.access_token);
+    }
+
+    try std.testing.expectEqualStrings("user", decoded.user);
+    try std.testing.expectEqualStrings("token", decoded.access_token);
+}
+
+test "oauthbearer decodes bearer response" {
+    const encoded = try imap.auth.oauthbearer.initialResponseAlloc(std.testing.allocator, "user", "token", "imap.example.com", 993);
+    defer std.testing.allocator.free(encoded);
+
+    const decoded = try imap.auth.oauthbearer.decodeAlloc(std.testing.allocator, encoded);
+    defer {
+        std.testing.allocator.free(decoded.authzid);
+        std.testing.allocator.free(decoded.access_token);
+        std.testing.allocator.free(decoded.host);
+    }
+
+    try std.testing.expectEqualStrings("user", decoded.authzid);
+    try std.testing.expectEqualStrings("token", decoded.access_token);
+    try std.testing.expectEqualStrings("imap.example.com", decoded.host);
+    try std.testing.expectEqual(@as(?u16, 993), decoded.port);
+}

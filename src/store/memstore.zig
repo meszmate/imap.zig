@@ -285,6 +285,16 @@ pub const MemStore = struct {
     pub fn authenticateExternal(self: *MemStore, username: []const u8) !*User {
         return self.users.get(username) orelse error.InvalidCredentials;
     }
+
+    pub fn authenticateToken(self: *MemStore, username: []const u8, token: []const u8) !*User {
+        const user = self.users.get(username) orelse return error.InvalidCredentials;
+        if (!std.mem.eql(u8, user.password, token)) return error.InvalidCredentials;
+        return user;
+    }
+
+    pub fn authenticateAnonymous(self: *MemStore) !*User {
+        return self.users.get("anonymous") orelse error.InvalidCredentials;
+    }
 };
 
 pub fn matchesPattern(name: []const u8, pattern: []const u8) bool {

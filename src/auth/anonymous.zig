@@ -6,3 +6,10 @@ pub fn initialResponseAlloc(allocator: std.mem.Allocator, trace: []const u8) ![]
     _ = std.base64.standard.Encoder.encode(out, trace);
     return out;
 }
+
+pub fn decodeAlloc(allocator: std.mem.Allocator, text: []const u8) ![]u8 {
+    const len = try std.base64.standard.Decoder.calcSizeForSlice(text);
+    const out = try allocator.alloc(u8, len);
+    try std.base64.standard.Decoder.decode(out, text);
+    return out;
+}

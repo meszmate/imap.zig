@@ -9,10 +9,10 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 
 - IMAP4rev1-oriented protocol types, status parsing, number set parsing, modified UTF-7 mailbox handling, and a broader registry-backed capability surface
 - Public wire package with encoder/decoder primitives, literal handling, line reading, transports, and modified UTF-7
-- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`
-- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`
+- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`
+- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`
 - Auth namespace with mechanism helpers for `ANONYMOUS`, `CRAM-MD5`, `EXTERNAL`, `LOGIN`, `OAUTHBEARER`, `PLAIN`, and `XOAUTH2`
-- Filesystem-backed store backend in addition to the in-memory reference store
+- Filesystem-backed and optional PostgreSQL-backed store backends in addition to the in-memory reference store
 - Type-erased store backend/user/mailbox interfaces for backend-agnostic integration code
 - Explicit connection state machine and extension registry inspired by the local `~/imap-go` architecture
 - Public middleware chain primitives plus reusable logging, recovery, timeout, rate-limit, and metrics middleware
@@ -34,17 +34,17 @@ Implemented now:
 - Core command parsing and response generation
 - Basic IDLE flow and `DONE` termination
 - Capability, mailbox attribute, and response-code coverage widened from the current RFC/IANA registry surface
-- Extension registry with dependency resolution and built-in extension metadata
+- Extension registry with a much broader built-in inventory and dependency resolution across the local `~/imap-go` extension families
 - Explicit connection state machine for RFC-style state validation
-- Public auth helpers and working `AUTHENTICATE` support for PLAIN, LOGIN, and EXTERNAL
+- Public auth helpers and working `AUTHENTICATE` support for PLAIN, LOGIN, EXTERNAL, ANONYMOUS, CRAM-MD5, XOAUTH2, and OAUTHBEARER
 - Public wire encoder/decoder primitives
 - Backend-agnostic store interfaces for memstore and fsstore
 - Middleware and server connection/session building blocks for future dispatcher refactors
 - Basic authenticated client pooling with idle reuse
-- SORT and THREAD command support (stub implementations)
-- ACL commands (GETACL, SETACL, DELETEACL, LISTRIGHTS, MYRIGHTS)
-- QUOTA commands (GETQUOTA, SETQUOTA, GETQUOTAROOT)
-- METADATA commands (GETMETADATA, SETMETADATA)
+- SORT and THREAD command support with basic message-based ordering and threading
+- ACL commands (GETACL, SETACL, DELETEACL, LISTRIGHTS, MYRIGHTS) backed by mailbox ACL state
+- QUOTA commands (GETQUOTA, SETQUOTA, GETQUOTAROOT) backed by per-user quota state
+- METADATA commands (GETMETADATA, SETMETADATA) backed by mailbox metadata state
 - STARTTLS and COMPRESS=DEFLATE command stubs
 - UNAUTHENTICATE for session reset
 - REPLACE for atomic message replacement

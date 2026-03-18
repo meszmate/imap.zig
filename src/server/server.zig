@@ -4,6 +4,10 @@ const memstore = @import("../store/memstore.zig");
 const wire = @import("../wire/root.zig");
 const auth = @import("../auth/root.zig");
 
+fn serverCapabilities() []const u8 {
+    return "IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE SASL-IR AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL AUTH=CRAM-MD5 AUTH=XOAUTH2 AUTH=OAUTHBEARER AUTH=ANONYMOUS SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE";
+}
+
 pub const Server = struct {
     allocator: std.mem.Allocator,
     store: *memstore.MemStore,
@@ -19,7 +23,7 @@ pub const Server = struct {
         var reader = wire.LineReader.init(self.allocator, transport);
         var session = SessionState{};
 
-        try transport.writeAll("* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE] imap.zig ready\r\n");
+        try transport.print("* OK [CAPABILITY {s}] imap.zig ready\r\n", .{serverCapabilities()});
 
         while (session.state != .logout) {
             const line = reader.readLineAlloc() catch |err| switch (err) {
@@ -51,7 +55,7 @@ pub const Server = struct {
             }
 
             if (std.ascii.eqlIgnoreCase(command_name, imap.commands.capability)) {
-                try transport.writeAll("* CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE\r\n");
+                try transport.print("* CAPABILITY {s}\r\n", .{serverCapabilities()});
                 try writeTagged(transport, tag, .ok, null, "CAPABILITY completed");
                 continue;
             }
@@ -93,9 +97,10 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .bad, null, "AUTHENTICATE requires mechanism");
                     continue;
                 }
-                if (std.ascii.eqlIgnoreCase(args[0].value, "PLAIN")) {
-                    try transport.writeAll("+ \r\n");
-                    const response = try reader.readLineAlloc();
+                const mechanism = args[0].value;
+                const initial = if (args.len >= 2) args[1].value else null;
+                if (std.ascii.eqlIgnoreCase(mechanism, "PLAIN")) {
+                    const response = try readAuthResponseAlloc(self.allocator, &reader, transport, initial, null);
                     defer self.allocator.free(response);
                     const creds = auth.plain.decodeResponseAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
                         try writeTagged(transport, tag, .bad, null, "invalid PLAIN response");
@@ -115,9 +120,8 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
                     continue;
                 }
-                if (std.ascii.eqlIgnoreCase(args[0].value, "EXTERNAL")) {
-                    try transport.writeAll("+ \r\n");
-                    const response = try reader.readLineAlloc();
+                if (std.ascii.eqlIgnoreCase(mechanism, "EXTERNAL")) {
+                    const response = try readAuthResponseAlloc(self.allocator, &reader, transport, initial, null);
                     defer self.allocator.free(response);
                     const authzid = auth.external.decodeAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
                         try writeTagged(transport, tag, .bad, null, "invalid EXTERNAL response");
@@ -133,7 +137,7 @@ pub const Server = struct {
                     try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
                     continue;
                 }
-                if (std.ascii.eqlIgnoreCase(args[0].value, "LOGIN")) {
+                if (std.ascii.eqlIgnoreCase(mechanism, "LOGIN")) {
                     try transport.print("+ {s}\r\n", .{auth.login.usernamePrompt()});
                     const username_b64 = try reader.readLineAlloc();
                     defer self.allocator.free(username_b64);
@@ -151,6 +155,95 @@ pub const Server = struct {
                     };
                     defer self.allocator.free(password);
                     const user = self.store.authenticate(username, password) catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(mechanism, "ANONYMOUS")) {
+                    const response = try readAuthResponseAlloc(self.allocator, &reader, transport, initial, null);
+                    defer self.allocator.free(response);
+                    const trace = auth.anonymous.decodeAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid ANONYMOUS response");
+                        continue;
+                    };
+                    defer self.allocator.free(trace);
+                    const user = self.store.authenticateAnonymous() catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(mechanism, "CRAM-MD5")) {
+                    const challenge = try fixedCramMd5ChallengeAlloc(self.allocator);
+                    defer self.allocator.free(challenge);
+                    const response = try readAuthResponseAlloc(self.allocator, &reader, transport, initial, challenge);
+                    defer self.allocator.free(response);
+                    const parsed = auth.crammd5.verifyResponseAlloc(self.allocator, std.mem.trim(u8, response, " "), challenge) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid CRAM-MD5 response");
+                        continue;
+                    };
+                    defer {
+                        self.allocator.free(parsed.username);
+                        self.allocator.free(parsed.digest);
+                    }
+                    const user = self.store.users.get(parsed.username) orelse {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    const expected = auth.crammd5.expectedDigestAlloc(self.allocator, user.password, challenge) catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    defer self.allocator.free(expected);
+                    if (!std.ascii.eqlIgnoreCase(expected, parsed.digest)) {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    }
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(mechanism, "XOAUTH2")) {
+                    const response = try readAuthResponseAlloc(self.allocator, &reader, transport, initial, null);
+                    defer self.allocator.free(response);
+                    const creds = auth.xoauth2.decodeAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid XOAUTH2 response");
+                        continue;
+                    };
+                    defer {
+                        self.allocator.free(creds.user);
+                        self.allocator.free(creds.access_token);
+                    }
+                    const user = self.store.authenticateToken(creds.user, creds.access_token) catch {
+                        try writeTagged(transport, tag, .no, null, "authentication failed");
+                        continue;
+                    };
+                    session.user = user;
+                    session.state = .authenticated;
+                    try writeTagged(transport, tag, .ok, null, "AUTHENTICATE completed");
+                    continue;
+                }
+                if (std.ascii.eqlIgnoreCase(mechanism, "OAUTHBEARER")) {
+                    const response = try readAuthResponseAlloc(self.allocator, &reader, transport, initial, null);
+                    defer self.allocator.free(response);
+                    const creds = auth.oauthbearer.decodeAlloc(self.allocator, std.mem.trim(u8, response, " ")) catch {
+                        try writeTagged(transport, tag, .bad, null, "invalid OAUTHBEARER response");
+                        continue;
+                    };
+                    defer {
+                        self.allocator.free(creds.authzid);
+                        self.allocator.free(creds.access_token);
+                        self.allocator.free(creds.host);
+                    }
+                    const user = self.store.authenticateToken(creds.authzid, creds.access_token) catch {
                         try writeTagged(transport, tag, .no, null, "authentication failed");
                         continue;
                     };
@@ -1029,6 +1122,23 @@ const Token = struct {
     value: []const u8,
     kind: TokenKind,
 };
+
+fn readAuthResponseAlloc(allocator: std.mem.Allocator, reader: *wire.LineReader, transport: wire.Transport, initial: ?[]const u8, challenge: ?[]const u8) ![]u8 {
+    if (initial) |value| return allocator.dupe(u8, value);
+    if (challenge) |encoded| {
+        try transport.print("+ {s}\r\n", .{encoded});
+    } else {
+        try transport.writeAll("+ \r\n");
+    }
+    return reader.readLineAlloc();
+}
+
+fn fixedCramMd5ChallengeAlloc(allocator: std.mem.Allocator) ![]u8 {
+    const raw = "<imap.zig@localhost>";
+    const out = try allocator.alloc(u8, std.base64.standard.Encoder.calcSize(raw.len));
+    _ = std.base64.standard.Encoder.encode(out, raw);
+    return out;
+}
 
 fn tokenizeLine(allocator: std.mem.Allocator, line: []const u8) !std.ArrayList(Token) {
     var tokens: std.ArrayList(Token) = .empty;

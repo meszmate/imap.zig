@@ -20,7 +20,7 @@ zig build test
 - [src/auth/](/Users/meszmate/imap.zig/src/auth): SASL/auth mechanism helpers
 - [src/client/](/Users/meszmate/imap.zig/src/client): synchronous client API
 - [src/server/](/Users/meszmate/imap.zig/src/server): command dispatcher, connection/session helpers, and server loop
-- [src/store/](/Users/meszmate/imap.zig/src/store): in-memory, filesystem, and generic storage interfaces
+- [src/store/](/Users/meszmate/imap.zig/src/store): in-memory, filesystem, PostgreSQL, and generic storage interfaces
 - [src/state/](/Users/meszmate/imap.zig/src/state): connection state machine
 - [src/extension/](/Users/meszmate/imap.zig/src/extension): extension metadata and registry
 - [src/middleware/](/Users/meszmate/imap.zig/src/middleware): middleware chain primitives and built-in middleware

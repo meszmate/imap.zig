@@ -137,3 +137,35 @@ test "client authenticatePlain sends challenge response" {
     try client.authenticatePlain("user", "pass");
     try std.testing.expect(std.mem.startsWith(u8, scripted.output.items, "A0001 AUTHENTICATE PLAIN\r\n"));
 }
+
+test "client authenticateCramMd5 answers server challenge" {
+    var scripted = ScriptTransport.init(
+        std.testing.allocator,
+        "* OK [CAPABILITY IMAP4rev1 AUTH=CRAM-MD5] hi\r\n" ++
+            "+ PDE4OTYuNjk3MTcwOTUyQHBvc3Qub2ZmaWNlLm5ldD4=\r\n" ++
+            "A0001 OK AUTHENTICATE completed\r\n",
+    );
+    defer scripted.deinit();
+
+    var client = try imap.client.Client.init(std.testing.allocator, scripted.transport());
+    defer client.deinit();
+
+    try client.authenticateCramMd5("tim", "tanstaaftanstaaf");
+    try std.testing.expect(std.mem.startsWith(u8, scripted.output.items, "A0001 AUTHENTICATE CRAM-MD5\r\n"));
+}
+
+test "client authenticateXOAuth2 sends bearer response" {
+    var scripted = ScriptTransport.init(
+        std.testing.allocator,
+        "* OK [CAPABILITY IMAP4rev1 AUTH=XOAUTH2] hi\r\n" ++
+            "+ \r\n" ++
+            "A0001 OK AUTHENTICATE completed\r\n",
+    );
+    defer scripted.deinit();
+
+    var client = try imap.client.Client.init(std.testing.allocator, scripted.transport());
+    defer client.deinit();
+
+    try client.authenticateXOAuth2("user", "token");
+    try std.testing.expect(std.mem.startsWith(u8, scripted.output.items, "A0001 AUTHENTICATE XOAUTH2\r\n"));
+}
