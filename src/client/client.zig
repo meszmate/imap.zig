@@ -613,6 +613,135 @@ pub const Client = struct {
         try self.ensureOk(&result);
     }
 
+    // --- Capability convenience methods (matching Go client) ---
+
+    pub fn hasCap(self: *const Client, name: []const u8) bool {
+        return self.capabilities.has(name);
+    }
+
+    pub fn supportsIdle(self: *const Client) bool {
+        return self.hasCap("IDLE");
+    }
+
+    pub fn supportsMove(self: *const Client) bool {
+        return self.hasCap("MOVE");
+    }
+
+    pub fn supportsLiteralPlus(self: *const Client) bool {
+        return self.hasCap("LITERAL+");
+    }
+
+    pub fn supportsUIDPlus(self: *const Client) bool {
+        return self.hasCap("UIDPLUS");
+    }
+
+    pub fn supportsCondStore(self: *const Client) bool {
+        return self.hasCap("CONDSTORE");
+    }
+
+    pub fn supportsQResync(self: *const Client) bool {
+        return self.hasCap("QRESYNC");
+    }
+
+    pub fn supportsNamespace(self: *const Client) bool {
+        return self.hasCap("NAMESPACE");
+    }
+
+    pub fn supportsSort(self: *const Client) bool {
+        return self.hasCap("SORT");
+    }
+
+    pub fn supportsID(self: *const Client) bool {
+        return self.hasCap("ID");
+    }
+
+    pub fn supportsEnable(self: *const Client) bool {
+        return self.hasCap("ENABLE");
+    }
+
+    pub fn supportsStartTLS(self: *const Client) bool {
+        return self.hasCap("STARTTLS");
+    }
+
+    pub fn supportsCompress(self: *const Client) bool {
+        return self.hasCap("COMPRESS=DEFLATE");
+    }
+
+    // --- UID command variants ---
+
+    pub fn uidFetch(self: *Client, set: []const u8, items: []const u8) ![][]u8 {
+        const command = try std.fmt.allocPrint(self.allocator, "UID FETCH {s} {s}", .{ set, items });
+        defer self.allocator.free(command);
+
+        var result = try self.runCommand(command, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn uidStore(self: *Client, set: []const u8, operation: []const u8, uid_flags: []const []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.print("UID STORE {s} {s} (", .{ set, operation });
+        for (uid_flags, 0..) |flag, index| {
+            if (index != 0) try writer.writeByte(' ');
+            try writer.writeAll(flag);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn uidCopy(self: *Client, set: []const u8, destination: []const u8) !imap.CopyData {
+        return self.copyLike("UID COPY", set, destination);
+    }
+
+    pub fn uidMove(self: *Client, set: []const u8, destination: []const u8) !imap.CopyData {
+        return self.copyLike("UID MOVE", set, destination);
+    }
+
+    pub fn uidExpunge(self: *Client, uid_set: []const u8) ![][]u8 {
+        const command = try std.fmt.allocPrint(self.allocator, "UID EXPUNGE {s}", .{uid_set});
+        defer self.allocator.free(command);
+
+        var result = try self.runCommand(command, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn uidSearch(self: *Client, criteria: []const u8) ![]u32 {
+        const command = try std.fmt.allocPrint(self.allocator, "UID SEARCH {s}", .{criteria});
+        defer self.allocator.free(command);
+
+        var result = try self.runCommand(command, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseSearchData(self.allocator, &result);
+    }
+
+    pub fn uidSort(self: *Client, criteria: []const imap.SortCriterion, charset: []const u8, search_criteria: []const u8) ![]u32 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("UID SORT (");
+        for (criteria, 0..) |c, i| {
+            if (i != 0) try writer.writeByte(' ');
+            if (c.reverse) try writer.writeAll("REVERSE ");
+            try writer.writeAll(c.key.label());
+        }
+        try writer.print(") {s} {s}", .{ charset, search_criteria });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseSortData(self.allocator, &result);
+    }
+
     fn readGreeting(self: *Client) !void {
         const line = try self.reader.readLineAlloc();
         defer self.allocator.free(line);

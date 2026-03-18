@@ -1,4 +1,5 @@
 const std = @import("std");
+const response = @import("response.zig");
 
 pub const ConnState = enum {
     not_authenticated,
@@ -121,6 +122,8 @@ pub const BodyStructure = struct {
 
 pub const SelectOptions = struct {
     read_only: bool = false,
+    condstore: bool = false,
+    qresync: ?SelectQResyncParam = null,
 };
 
 pub const SelectData = struct {
@@ -134,16 +137,34 @@ pub const SelectData = struct {
     permanent_flags: []const []const u8 = &.{},
     read_only: bool = false,
     highest_mod_seq: ?u64 = null,
+    mailbox_id: ?[]const u8 = null,
+};
+
+pub const ListReturnMetadata = struct {
+    options: []const []const u8 = &.{},
+    max_size: ?u64 = null,
+    depth: ?[]const u8 = null,
 };
 
 pub const ListOptions = struct {
     subscribed_only: bool = false,
+    select_remote: bool = false,
+    select_recursive_match: bool = false,
+    select_special_use: bool = false,
+    return_subscribed: bool = false,
+    return_children: bool = false,
+    return_special_use: bool = false,
+    return_status: ?StatusOptions = null,
+    return_my_rights: bool = false,
 };
 
 pub const ListData = struct {
     attrs: []const []const u8 = &.{},
     delimiter: ?u8 = '/',
     mailbox: []const u8 = "",
+    old_name: ?[]const u8 = null,
+    status: ?StatusData = null,
+    my_rights: ?[]const u8 = null,
 };
 
 pub const StatusOptions = struct {
@@ -154,6 +175,9 @@ pub const StatusOptions = struct {
     uid_validity: bool = true,
     size: bool = false,
     highest_mod_seq: bool = false,
+    append_limit: bool = false,
+    deleted: bool = false,
+    mailbox_id: bool = false,
 };
 
 pub const StatusData = struct {
@@ -165,11 +189,16 @@ pub const StatusData = struct {
     uid_validity: ?u32 = null,
     size: ?u64 = null,
     highest_mod_seq: ?u64 = null,
+    append_limit: ?u32 = null,
+    deleted: ?u32 = null,
+    mailbox_id: ?[]const u8 = null,
 };
 
 pub const AppendOptions = struct {
     flags: []const []const u8 = &.{},
     internal_date_unix: ?u64 = null,
+    binary: bool = false,
+    utf8: bool = false,
 };
 
 pub const AppendData = struct {
@@ -494,3 +523,83 @@ pub fn formatInternalDateUnix(buffer: []u8, unix_seconds: u64) ![]const u8 {
         },
     );
 }
+
+// --- CREATE ---
+pub const CreateOptions = struct {
+    special_use: ?[]const u8 = null,
+};
+
+// --- STORE extension ---
+pub const StoreOptions = struct {
+    unchanged_since: ?u64 = null,
+};
+
+// --- NAMESPACE ---
+pub const NamespaceDescriptor = struct {
+    prefix: []const u8 = "",
+    delimiter: ?u8 = null,
+};
+
+pub const NamespaceData = struct {
+    personal: []const NamespaceDescriptor = &.{},
+    other: []const NamespaceDescriptor = &.{},
+    shared: []const NamespaceDescriptor = &.{},
+};
+
+// --- ID ---
+pub const IDFieldName = "name";
+pub const IDFieldVersion = "version";
+pub const IDFieldOS = "os";
+pub const IDFieldOSVersion = "os-version";
+pub const IDFieldVendor = "vendor";
+pub const IDFieldSupportURL = "support-url";
+pub const IDFieldAddress = "address";
+pub const IDFieldDate = "date";
+pub const IDFieldCommand = "command";
+pub const IDFieldArguments = "arguments";
+pub const IDFieldEnvironment = "environment";
+
+// --- Extended SEARCH results ---
+pub const SearchReturnPartial = struct {
+    offset: i32 = 0,
+    count: u32 = 0,
+};
+
+pub const SearchPartialData = struct {
+    offset: i32 = 0,
+    total: u32 = 0,
+    uids: []const UID = &.{},
+};
+
+pub const MultiSearchResult = struct {
+    mailbox: []const u8 = "",
+    uid_validity: u32 = 0,
+    data: ?ESearchData = null,
+};
+
+// --- IMAP Error ---
+pub const IMAPError = struct {
+    kind: response.StatusKind,
+    code: ?[]const u8 = null,
+    text: []const u8 = "",
+
+    pub fn errNo(text: []const u8) IMAPError {
+        return .{ .kind = .no, .text = text };
+    }
+
+    pub fn errBad(text: []const u8) IMAPError {
+        return .{ .kind = .bad, .text = text };
+    }
+
+    pub fn errBye(text: []const u8) IMAPError {
+        return .{ .kind = .bye, .text = text };
+    }
+
+    pub fn errNoWithCode(code: []const u8, text: []const u8) IMAPError {
+        return .{ .kind = .no, .code = code, .text = text };
+    }
+
+    pub fn errBadWithCode(code: []const u8, text: []const u8) IMAPError {
+        return .{ .kind = .bad, .code = code, .text = text };
+    }
+};

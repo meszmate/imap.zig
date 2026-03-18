@@ -9,14 +9,16 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 
 - IMAP4rev1-oriented protocol types, status parsing, number set parsing, modified UTF-7 mailbox handling, and a broader registry-backed capability surface
 - Public wire package with encoder/decoder primitives, literal handling, line reading, transports, and modified UTF-7
-- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`
-- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`
+- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`; UID command variants (`uidFetch`, `uidStore`, `uidCopy`, `uidMove`, `uidExpunge`, `uidSearch`, `uidSort`) and capability convenience methods (`hasCap`, `supportsIdle`, `supportsMove`, etc.)
+- In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`; server Options, Dispatcher, specialized Writers (FetchWriter, ListWriter, UpdateWriter, ExpungeWriter, MoveWriter), and Trackers (MailboxTracker, SessionTracker)
 - Auth namespace with mechanism helpers for `ANONYMOUS`, `CRAM-MD5`, `EXTERNAL`, `LOGIN`, `OAUTHBEARER`, `PLAIN`, and `XOAUTH2`
 - Filesystem-backed and optional PostgreSQL-backed store backends in addition to the in-memory reference store
 - Type-erased store backend/user/mailbox interfaces for backend-agnostic integration code
 - Explicit connection state machine and extension registry inspired by the local `~/imap-go` architecture
 - Public middleware chain primitives plus reusable logging, recovery, timeout, rate-limit, and metrics middleware
 - Public server connection/session primitives and a reusable client connection pool
+- Extended protocol types: `CreateOptions`, `StoreOptions`, `NamespaceData`, `IMAPError`, `ListReturnMetadata`, `SearchReturnPartial`, `MultiSearchResult`; enhanced `AppendOptions` (binary, utf8), `ListOptions`/`ListData` (extended return options), `SelectOptions` (condstore, qresync), `StatusOptions`/`StatusData` (append_limit, deleted, mailbox_id)
+- Test harness (`imaptest` module) with `Harness` and `MockSession` for integration testing
 - Transport abstraction for testing, scripting, and custom I/O
 - GitHub Actions CI with multi-platform build, test, and cross-compile jobs, plus examples and unit tests
 
@@ -50,6 +52,13 @@ Implemented now:
 - REPLACE for atomic message replacement
 - Literal+/Literal- marker parsing (RFC 7888)
 - Extended SEARCH criteria: LARGER, SMALLER, HEADER, KEYWORD, UNKEYWORD, date-based filters
+- Server infrastructure: Options, Dispatcher, specialized Writers (FetchWriter, ListWriter, UpdateWriter, ExpungeWriter, MoveWriter), and Trackers (MailboxTracker, SessionTracker)
+- Client UID command variants: `uidFetch`, `uidStore`, `uidCopy`, `uidMove`, `uidExpunge`, `uidSearch`, `uidSort`
+- Client capability convenience methods: `hasCap`, `supportsIdle`, `supportsMove`, etc.
+- Extended types: `CreateOptions`, `StoreOptions`, `NamespaceData`, `IMAPError`, `ListReturnMetadata`, `SearchReturnPartial`, `MultiSearchResult`
+- Enhanced `AppendOptions` (binary, utf8), `ListOptions`/`ListData` (extended return options), `SelectOptions` (condstore, qresync), `StatusOptions`/`StatusData` (append_limit, deleted, mailbox_id)
+- Test harness module (`imaptest`) with `Harness` and `MockSession`
+- Proxy example (`examples/proxy.zig`)
 
 Planned next:
 
@@ -136,12 +145,13 @@ src/response.zig       Tagged and untagged status parsing
 src/wire/              Transport, line reader, modified UTF-7
 src/auth/              SASL/auth mechanism helpers
 src/client/            Synchronous IMAP client
-src/server/            Command dispatcher and TCP server loop
+src/server/            Command dispatcher, writers, trackers, and TCP server loop
 src/store/             In-memory, filesystem, and generic store interfaces
 src/state/             Connection state machine
 src/extension/         Extension metadata and dependency registry
 src/middleware/        Middleware chain and built-in middleware
-examples/              Simple client and server examples
+src/imaptest.zig       Test harness with Harness and MockSession
+examples/              Client, server, and proxy examples
 tests/                 Protocol, client, server, store, middleware, state, and extension tests
 ```
 

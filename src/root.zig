@@ -65,7 +65,18 @@ pub const ESearchData = types.ESearchData;
 pub const ExtendedFetchOptions = types.ExtendedFetchOptions;
 pub const SelectQResyncParam = types.SelectQResyncParam;
 pub const ReplaceOptions = types.ReplaceOptions;
+pub const CreateOptions = types.CreateOptions;
+pub const StoreOptions = types.StoreOptions;
+pub const NamespaceDescriptor = types.NamespaceDescriptor;
+pub const NamespaceData = types.NamespaceData;
+pub const ListReturnMetadata = types.ListReturnMetadata;
+pub const SearchReturnPartial = types.SearchReturnPartial;
+pub const SearchPartialData = types.SearchPartialData;
+pub const MultiSearchResult = types.MultiSearchResult;
+pub const IMAPError = types.IMAPError;
 pub const formatInternalDateUnix = types.formatInternalDateUnix;
+
+pub const imaptest = @import("imaptest.zig");
 
 pub const Cap = capability.Cap;
 pub const caps = capability.caps;

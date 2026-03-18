@@ -2,6 +2,7 @@ pub const memstore = @import("memstore.zig");
 pub const fsstore = @import("fsstore.zig");
 pub const pgstore = @import("pgstore.zig");
 pub const interface = @import("interface.zig");
+pub const adapter = @import("adapter.zig");
 
 pub const MemStore = memstore.MemStore;
 pub const User = memstore.User;
@@ -15,3 +16,4 @@ pub const PgStoreOptions = pgstore.Options;
 pub const Backend = interface.Backend;
 pub const BackendUser = interface.User;
 pub const BackendMailbox = interface.Mailbox;
+pub const SessionAdapter = adapter.SessionAdapter;

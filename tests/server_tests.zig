@@ -269,3 +269,46 @@ test "server search with larger smaller and header" {
     // Message 1 is < 50 bytes
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1\r\n") != null);
 }
+
+test "dispatcher register and dispatch" {
+    var dispatcher = imap.server.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+
+    try dispatcher.register("NOOP", struct {
+        fn handle(ctx: *imap.server.CommandContext) !void {
+            try ctx.transport.print("{s} OK NOOP completed\r\n", .{ctx.tag});
+        }
+    }.handle);
+
+    try std.testing.expect(dispatcher.get("NOOP") != null);
+    try std.testing.expect(dispatcher.get("noop") != null);
+    try std.testing.expect(dispatcher.get("UNKNOWN") == null);
+}
+
+test "tracker queue and flush" {
+    var session_tracker = imap.server.SessionTracker.init(std.testing.allocator);
+    defer session_tracker.deinit();
+
+    try session_tracker.queueUpdate(.{ .kind = .exists, .num_messages = 5 });
+    try session_tracker.queueUpdate(.{ .kind = .exists, .num_messages = 6 });
+
+    try std.testing.expect(session_tracker.hasPendingUpdates());
+    try std.testing.expectEqual(@as(usize, 2), session_tracker.updates.items.len);
+}
+
+test "fetch writer output" {
+    var transport = ScriptTransport.init(std.testing.allocator, "");
+    defer transport.deinit();
+
+    var writer = imap.server.FetchWriter.init(std.testing.allocator, transport.transport());
+    try writer.writeFlags(1, &.{ "\\Seen", "\\Flagged" });
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 FETCH (FLAGS (\\Seen \\Flagged))") != null);
+}
+
+test "server options defaults" {
+    const opts = imap.server.Options{};
+    try std.testing.expectEqualStrings("imap.zig ready", opts.greeting_text);
+    try std.testing.expectEqual(@as(u64, 0), opts.max_literal_size);
+    try std.testing.expectEqual(false, opts.allow_insecure_auth);
+}

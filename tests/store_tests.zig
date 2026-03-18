@@ -109,3 +109,14 @@ test "pgstore works with mock executor without postgres" {
     try std.testing.expect(std.mem.indexOf(u8, mock.commands.items[0], "CREATE TABLE IF NOT EXISTS imap_users") != null);
     try std.testing.expect(std.mem.indexOf(u8, mock.commands.items[1], "INSERT INTO imap_users") != null);
 }
+
+test "create options and store options" {
+    const create_opts = imap.CreateOptions{};
+    try std.testing.expect(create_opts.special_use == null);
+
+    const store_opts = imap.StoreOptions{};
+    try std.testing.expect(store_opts.unchanged_since == null);
+
+    const ns = imap.NamespaceData{};
+    try std.testing.expectEqual(@as(usize, 0), ns.personal.len);
+}
