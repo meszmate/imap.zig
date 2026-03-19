@@ -559,6 +559,17 @@ pub const IDFieldCommand = "command";
 pub const IDFieldArguments = "arguments";
 pub const IDFieldEnvironment = "environment";
 
+/// IDData holds key-value pairs for the IMAP ID command.
+/// Keys are field names (see IDField* constants), values are nullable strings.
+pub const IDData = struct {
+    entries: []const IDEntry = &.{},
+
+    pub const IDEntry = struct {
+        key: []const u8,
+        value: ?[]const u8 = null,
+    };
+};
+
 // --- Extended SEARCH results ---
 pub const SearchReturnPartial = struct {
     offset: i32 = 0,

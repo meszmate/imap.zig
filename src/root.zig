@@ -74,6 +74,7 @@ pub const SearchReturnPartial = types.SearchReturnPartial;
 pub const SearchPartialData = types.SearchPartialData;
 pub const MultiSearchResult = types.MultiSearchResult;
 pub const IMAPError = types.IMAPError;
+pub const IDData = types.IDData;
 pub const formatInternalDateUnix = types.formatInternalDateUnix;
 
 pub const imaptest = @import("imaptest.zig");

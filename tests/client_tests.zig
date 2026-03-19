@@ -154,6 +154,45 @@ test "client authenticateCramMd5 answers server challenge" {
     try std.testing.expect(std.mem.startsWith(u8, scripted.output.items, "A0001 AUTHENTICATE CRAM-MD5\r\n"));
 }
 
+test "client options and mailbox state" {
+    const opts = imap.client.Options.defaultOptions();
+    try std.testing.expectEqual(@as(u64, 0), opts.read_timeout_ms);
+    try std.testing.expectEqual(false, opts.debug_log);
+
+    var state = imap.client.MailboxState{};
+    state.updateFromLine("* 5 EXISTS", null);
+    try std.testing.expectEqual(@as(u32, 5), state.num_messages);
+    state.updateFromLine("* 2 RECENT", null);
+    try std.testing.expectEqual(@as(u32, 2), state.num_recent);
+    state.updateFromLine("* 3 EXPUNGE", null);
+    try std.testing.expectEqual(@as(u32, 4), state.num_messages);
+    state.reset();
+    try std.testing.expectEqual(@as(u32, 0), state.num_messages);
+}
+
+test "encoder literal plus and binary" {
+    var encoder = imap.wire.Encoder.init(std.testing.allocator);
+    defer encoder.deinit();
+    try encoder.literalNonSync("hello");
+    const rendered = try encoder.finish();
+    defer std.testing.allocator.free(rendered);
+    try std.testing.expectEqualStrings("{5+}\r\nhello", rendered);
+
+    var encoder2 = imap.wire.Encoder.init(std.testing.allocator);
+    defer encoder2.deinit();
+    try encoder2.binaryLiteral("data");
+    const rendered2 = try encoder2.finish();
+    defer std.testing.allocator.free(rendered2);
+    try std.testing.expectEqualStrings("~{4}\r\ndata", rendered2);
+
+    var encoder3 = imap.wire.Encoder.init(std.testing.allocator);
+    defer encoder3.deinit();
+    try encoder3.literalMinus("test");
+    const rendered3 = try encoder3.finish();
+    defer std.testing.allocator.free(rendered3);
+    try std.testing.expectEqualStrings("{4-}\r\ntest", rendered3);
+}
+
 test "client authenticateXOAuth2 sends bearer response" {
     var scripted = ScriptTransport.init(
         std.testing.allocator,
