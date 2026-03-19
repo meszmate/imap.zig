@@ -1,6 +1,7 @@
 const std = @import("std");
 const imap = @import("../root.zig");
 const memstore = @import("memstore.zig");
+const interface = @import("interface.zig");
 
 /// SessionAdapter bridges a memstore backend to the IMAP server protocol.
 /// It handles sequence-to-UID mapping, body section extraction, and
@@ -168,5 +169,132 @@ pub const SessionAdapter = struct {
 
         // Default: return full body
         return allocator.dupe(u8, applyPartial(msg.body, section.partial));
+    }
+};
+
+/// ProtocolAdapter bridges a store.Backend to full IMAP server protocol.
+/// It manages sequence-to-UID mapping and translates IMAP operations.
+pub const ProtocolAdapter = struct {
+    allocator: std.mem.Allocator,
+    backend: interface.Backend,
+    user: ?interface.User = null,
+    mailbox: ?interface.Mailbox = null,
+    uid_map: std.ArrayList(u32) = .empty,
+
+    pub fn init(allocator: std.mem.Allocator, backend: interface.Backend) ProtocolAdapter {
+        return .{
+            .allocator = allocator,
+            .backend = backend,
+        };
+    }
+
+    pub fn deinit(self: *ProtocolAdapter) void {
+        if (self.mailbox) |*mb| mb.deinit();
+        if (self.user) |*u| u.deinit();
+        self.uid_map.deinit(self.allocator);
+    }
+
+    pub fn login(self: *ProtocolAdapter, username: []const u8, password: []const u8) !void {
+        self.user = try self.backend.authenticate(self.allocator, username, password);
+    }
+
+    pub fn selectMailbox(self: *ProtocolAdapter, name: []const u8) !interface.MailboxInfo {
+        if (self.mailbox) |*mb| mb.deinit();
+        self.mailbox = try self.user.?.openMailbox(name);
+        try self.rebuildUidMap();
+        return self.mailbox.?.info();
+    }
+
+    pub fn unselectMailbox(self: *ProtocolAdapter) void {
+        if (self.mailbox) |*mb| mb.deinit();
+        self.mailbox = null;
+        self.uid_map.clearRetainingCapacity();
+    }
+
+    /// Rebuild the sequence-to-UID mapping.
+    fn rebuildUidMap(self: *ProtocolAdapter) !void {
+        self.uid_map.clearRetainingCapacity();
+        const uids = try self.mailbox.?.listUids();
+        defer self.allocator.free(uids);
+        try self.uid_map.appendSlice(self.allocator, uids);
+    }
+
+    /// Convert sequence number to UID.
+    pub fn seqToUid(self: *const ProtocolAdapter, seq: u32) ?u32 {
+        if (seq == 0 or seq > self.uid_map.items.len) return null;
+        return self.uid_map.items[seq - 1];
+    }
+
+    /// Convert UID to sequence number.
+    pub fn uidToSeq(self: *const ProtocolAdapter, uid: u32) ?u32 {
+        for (self.uid_map.items, 0..) |u, i| {
+            if (u == uid) return @intCast(i + 1);
+        }
+        return null;
+    }
+
+    /// Resolve a set of sequence numbers or UIDs to UIDs.
+    pub fn resolveToUidsAlloc(self: *const ProtocolAdapter, nums: []const u32, is_uid: bool) ![]u32 {
+        if (is_uid) return self.allocator.dupe(u32, nums);
+        var uids: std.ArrayList(u32) = .empty;
+        errdefer uids.deinit(self.allocator);
+        for (nums) |seq| {
+            if (self.seqToUid(seq)) |uid| try uids.append(self.allocator, uid);
+        }
+        return uids.toOwnedSlice(self.allocator);
+    }
+
+    pub fn fetchMessages(self: *ProtocolAdapter, uids: []const u32) ![]interface.MessageData {
+        return self.mailbox.?.getMessages(uids);
+    }
+
+    pub fn storeFlags(self: *ProtocolAdapter, uids: []const u32, action: u8, flags: []const []const u8) !void {
+        return self.mailbox.?.setFlags(uids, action, flags);
+    }
+
+    pub fn copyMessages(self: *ProtocolAdapter, uids: []const u32, dest: []const u8) !interface.CopyResult {
+        return self.mailbox.?.copyMessages(uids, dest);
+    }
+
+    pub fn expunge(self: *ProtocolAdapter, uid_set: ?[]const u32) ![]u32 {
+        const result = try self.mailbox.?.expungeMessages(uid_set);
+        try self.rebuildUidMap();
+        return result;
+    }
+
+    pub fn searchMessages(self: *ProtocolAdapter, criteria: *const interface.SearchParams) ![]u32 {
+        return self.mailbox.?.searchMessages(criteria);
+    }
+
+    pub fn appendMessage(self: *ProtocolAdapter, mailbox_name: []const u8, message: []const u8) !void {
+        return self.user.?.appendMessage(mailbox_name, message);
+    }
+
+    pub fn createMailbox(self: *ProtocolAdapter, name: []const u8) !void {
+        return self.user.?.createMailbox(name);
+    }
+
+    pub fn deleteMailbox(self: *ProtocolAdapter, name: []const u8) !void {
+        return self.user.?.deleteMailbox(name);
+    }
+
+    pub fn renameMailbox(self: *ProtocolAdapter, old_name: []const u8, new_name: []const u8) !void {
+        return self.user.?.renameMailbox(old_name, new_name);
+    }
+
+    pub fn listMailboxes(self: *ProtocolAdapter) ![][]u8 {
+        return self.user.?.listMailboxesAlloc();
+    }
+
+    pub fn getMailboxStatus(self: *ProtocolAdapter, name: []const u8) !interface.MailboxInfo {
+        return self.user.?.getMailboxStatus(name);
+    }
+
+    pub fn subscribeMailbox(self: *ProtocolAdapter, name: []const u8) !void {
+        return self.user.?.subscribeMailbox(name);
+    }
+
+    pub fn unsubscribeMailbox(self: *ProtocolAdapter, name: []const u8) !void {
+        return self.user.?.unsubscribeMailbox(name);
     }
 };

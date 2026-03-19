@@ -110,6 +110,90 @@ test "pgstore works with mock executor without postgres" {
     try std.testing.expect(std.mem.indexOf(u8, mock.commands.items[1], "INSERT INTO imap_users") != null);
 }
 
+test "store interface mailbox operations" {
+    var store = imap.store.memstore.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    var backend = imap.store.Backend.fromMemStore(&store);
+    var user = try backend.authenticate(std.testing.allocator, "user", "pass");
+    defer user.deinit();
+
+    var mailbox = try user.openMailbox("INBOX");
+    defer mailbox.deinit();
+
+    // Append a message
+    try mailbox.appendMessage("Subject: Test\r\n\r\nHello");
+
+    // Get info
+    const mb_info = try mailbox.info();
+    try std.testing.expectEqual(@as(u32, 1), mb_info.num_messages);
+    try std.testing.expectEqual(@as(u32, 1), mb_info.uid_validity);
+
+    // List UIDs
+    const uids = try mailbox.listUids();
+    defer std.testing.allocator.free(uids);
+    try std.testing.expectEqual(@as(usize, 1), uids.len);
+
+    // Get messages
+    const msgs = try mailbox.getMessages(uids);
+    defer mailbox.freeMessageData(msgs);
+    try std.testing.expectEqual(@as(usize, 1), msgs.len);
+    try std.testing.expect(std.mem.indexOf(u8, msgs[0].body, "Hello") != null);
+
+    // Set flags
+    try mailbox.setFlags(uids, imap.store.interface.FLAG_ACTION_ADD, &.{"\\Seen"});
+
+    // Search
+    const search_params = imap.store.SearchParams{ .seen = true };
+    const results = try mailbox.searchMessages(&search_params);
+    defer std.testing.allocator.free(results);
+    try std.testing.expectEqual(@as(usize, 1), results.len);
+
+    // Expunge (no deleted messages, should return empty)
+    const expunged = try mailbox.expungeMessages(null);
+    defer std.testing.allocator.free(expunged);
+    try std.testing.expectEqual(@as(usize, 0), expunged.len);
+}
+
+test "store interface subscribe and status" {
+    var store = imap.store.memstore.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    var backend = imap.store.Backend.fromMemStore(&store);
+    var user = try backend.authenticate(std.testing.allocator, "user", "pass");
+    defer user.deinit();
+
+    try user.subscribeMailbox("INBOX");
+    try user.unsubscribeMailbox("INBOX");
+
+    const status = try user.getMailboxStatus("INBOX");
+    try std.testing.expectEqual(@as(u32, 0), status.num_messages);
+}
+
+test "protocol adapter basic operations" {
+    var store = imap.store.memstore.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const mem_user = store.users.get("user").?;
+    const inbox = mem_user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage("Subject: Test\r\n\r\nBody", &.{}, null);
+
+    const backend = imap.store.Backend.fromMemStore(&store);
+    var adapter = imap.store.ProtocolAdapter.init(std.testing.allocator, backend);
+    defer adapter.deinit();
+
+    try adapter.login("user", "pass");
+    const info = try adapter.selectMailbox("INBOX");
+    try std.testing.expectEqual(@as(u32, 1), info.num_messages);
+
+    // Test seq-to-uid mapping
+    try std.testing.expect(adapter.seqToUid(1) != null);
+    try std.testing.expect(adapter.seqToUid(2) == null);
+}
+
 test "create options and store options" {
     const create_opts = imap.CreateOptions{};
     try std.testing.expect(create_opts.special_use == null);

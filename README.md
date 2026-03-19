@@ -12,8 +12,8 @@ It is designed as a practical foundation for both IMAP tooling and embedded mail
 - Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`; UID command variants (`uidFetch`, `uidStore`, `uidCopy`, `uidMove`, `uidExpunge`, `uidSearch`, `uidSort`) and capability convenience methods (`hasCap`, `supportsIdle`, `supportsMove`, etc.)
 - In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`; server Options, Dispatcher, specialized Writers (FetchWriter, ListWriter, UpdateWriter, ExpungeWriter, MoveWriter), and Trackers (MailboxTracker, SessionTracker)
 - Auth namespace with mechanism helpers for `ANONYMOUS`, `CRAM-MD5`, `EXTERNAL`, `LOGIN`, `OAUTHBEARER`, `PLAIN`, and `XOAUTH2`
-- Filesystem-backed and optional PostgreSQL-backed store backends in addition to the in-memory reference store
-- Type-erased store backend/user/mailbox interfaces for backend-agnostic integration code
+- Filesystem-backed and optional PostgreSQL-backed store backends in addition to the in-memory reference store, with full message CRUD, flag management, UID tracking, subscriptions, and search
+- Type-erased store backend/user/mailbox interfaces with full Mailbox operations (info, getMessages, setFlags, copyMessages, expunge, searchMessages, listUids, moveMessages) and ProtocolAdapter for seq/UID bridging
 - Explicit connection state machine and extension registry inspired by the local `~/imap-go` architecture
 - Public middleware chain primitives plus reusable logging, recovery, timeout, rate-limit, and metrics middleware
 - Public server connection/session primitives and a reusable client connection pool
@@ -40,7 +40,8 @@ Implemented now:
 - Explicit connection state machine for RFC-style state validation
 - Public auth helpers and working `AUTHENTICATE` support for PLAIN, LOGIN, EXTERNAL, ANONYMOUS, CRAM-MD5, XOAUTH2, and OAUTHBEARER
 - Public wire encoder/decoder primitives
-- Backend-agnostic store interfaces for memstore and fsstore
+- Backend-agnostic store interfaces with full Mailbox vtable (info, getMessages, setFlags, copy, expunge, search, listUids, move) and ProtocolAdapter for seq/UID translation
+- Store backends: memstore (full operations), fsstore (per-message file storage with UID tracking, flags, subscriptions), pgstore (UID tracking, flag operations, copy, expunge, status queries)
 - Middleware and server connection/session building blocks for future dispatcher refactors
 - Basic authenticated client pooling with idle reuse
 - SORT and THREAD command support with basic message-based ordering and threading
