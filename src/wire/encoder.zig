@@ -69,6 +69,27 @@ pub const Encoder = struct {
         try self.bytes.appendSlice(self.allocator, value);
     }
 
+    /// Write a non-synchronizing literal (LITERAL+, RFC 7888): {n+}\r\n<data>
+    pub fn literalNonSync(self: *Encoder, value: []const u8) !void {
+        const writer = self.bytes.writer(self.allocator);
+        try writer.print("{{{d}+}}\r\n", .{value.len});
+        try self.bytes.appendSlice(self.allocator, value);
+    }
+
+    /// Write a literal- (RFC 7888): {n-}\r\n<data>
+    pub fn literalMinus(self: *Encoder, value: []const u8) !void {
+        const writer = self.bytes.writer(self.allocator);
+        try writer.print("{{{d}-}}\r\n", .{value.len});
+        try self.bytes.appendSlice(self.allocator, value);
+    }
+
+    /// Write a binary literal (RFC 3516): ~{n}\r\n<data>
+    pub fn binaryLiteral(self: *Encoder, value: []const u8) !void {
+        const writer = self.bytes.writer(self.allocator);
+        try writer.print("~{{{d}}}\r\n", .{value.len});
+        try self.bytes.appendSlice(self.allocator, value);
+    }
+
     pub fn finish(self: *Encoder) ![]u8 {
         return self.bytes.toOwnedSlice(self.allocator);
     }

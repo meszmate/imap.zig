@@ -1,6 +1,8 @@
 pub const memstore = @import("memstore.zig");
 pub const fsstore = @import("fsstore.zig");
+pub const pgstore = @import("pgstore.zig");
 pub const interface = @import("interface.zig");
+pub const adapter = @import("adapter.zig");
 
 pub const MemStore = memstore.MemStore;
 pub const User = memstore.User;
@@ -8,6 +10,15 @@ pub const Mailbox = memstore.Mailbox;
 pub const Message = memstore.Message;
 pub const FsStore = fsstore.FsStore;
 pub const FsUser = fsstore.FsUser;
+pub const PgStore = pgstore.PgStore;
+pub const PgUser = pgstore.PgUser;
+pub const PgStoreOptions = pgstore.Options;
 pub const Backend = interface.Backend;
 pub const BackendUser = interface.User;
 pub const BackendMailbox = interface.Mailbox;
+pub const MailboxInfo = interface.MailboxInfo;
+pub const MessageDataStore = interface.MessageData;
+pub const CopyResult = interface.CopyResult;
+pub const SearchParams = interface.SearchParams;
+pub const SessionAdapter = adapter.SessionAdapter;
+pub const ProtocolAdapter = adapter.ProtocolAdapter;

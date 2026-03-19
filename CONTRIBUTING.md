@@ -19,11 +19,13 @@ zig build test
 - [src/wire/](/Users/meszmate/imap.zig/src/wire): transport, line parsing, modified UTF-7
 - [src/auth/](/Users/meszmate/imap.zig/src/auth): SASL/auth mechanism helpers
 - [src/client/](/Users/meszmate/imap.zig/src/client): synchronous client API
-- [src/server/](/Users/meszmate/imap.zig/src/server): command dispatcher, connection/session helpers, and server loop
-- [src/store/](/Users/meszmate/imap.zig/src/store): in-memory, filesystem, and generic storage interfaces
+- [src/server/](/Users/meszmate/imap.zig/src/server): command dispatcher, writers (FetchWriter, ListWriter, UpdateWriter, ExpungeWriter, MoveWriter), trackers (MailboxTracker, SessionTracker), connection/session helpers, and server loop
+- [src/store/](/Users/meszmate/imap.zig/src/store): in-memory, filesystem, PostgreSQL, and generic storage interfaces
 - [src/state/](/Users/meszmate/imap.zig/src/state): connection state machine
 - [src/extension/](/Users/meszmate/imap.zig/src/extension): extension metadata and registry
 - [src/middleware/](/Users/meszmate/imap.zig/src/middleware): middleware chain primitives and built-in middleware
+- [src/imaptest.zig](/Users/meszmate/imap.zig/src/imaptest.zig): test harness with Harness and MockSession
+- [examples/](/Users/meszmate/imap.zig/examples): client, server, and proxy examples
 - [tests/](/Users/meszmate/imap.zig/tests): protocol, auth, client, server, store, middleware, state, and extension tests
 
 ## Guidelines

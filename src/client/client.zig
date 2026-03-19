@@ -78,28 +78,28 @@ pub const Client = struct {
     }
 
     pub fn authenticatePlain(self: *Client, username: []const u8, password: []const u8) !void {
-        var result = try self.runAuthenticate("PLAIN", null);
-        defer result.deinit();
+        var start = try self.runAuthenticate("PLAIN", null);
+        defer start.deinit();
         const response = try auth.plain.initialResponseAlloc(self.allocator, "", username, password);
         defer self.allocator.free(response);
         try self.transport.writeAll(response);
         try self.transport.writeAll("\r\n");
-        try self.finishAuthenticate(&result);
+        try self.finishAuthenticate(&start.result);
     }
 
     pub fn authenticateExternal(self: *Client, authzid: []const u8) !void {
-        var result = try self.runAuthenticate("EXTERNAL", null);
-        defer result.deinit();
+        var start = try self.runAuthenticate("EXTERNAL", null);
+        defer start.deinit();
         const response = try auth.external.initialResponseAlloc(self.allocator, authzid);
         defer self.allocator.free(response);
         try self.transport.writeAll(response);
         try self.transport.writeAll("\r\n");
-        try self.finishAuthenticate(&result);
+        try self.finishAuthenticate(&start.result);
     }
 
     pub fn authenticateLogin(self: *Client, username: []const u8, password: []const u8) !void {
-        var result = try self.runAuthenticate("LOGIN", null);
-        defer result.deinit();
+        var start = try self.runAuthenticate("LOGIN", null);
+        defer start.deinit();
         const user_b64 = try auth.login.encodeAlloc(self.allocator, username);
         defer self.allocator.free(user_b64);
         try self.transport.writeAll(user_b64);
@@ -111,7 +111,47 @@ pub const Client = struct {
         defer self.allocator.free(pass_b64);
         try self.transport.writeAll(pass_b64);
         try self.transport.writeAll("\r\n");
-        try self.finishAuthenticate(&result);
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateAnonymous(self: *Client, trace: []const u8) !void {
+        var start = try self.runAuthenticate("ANONYMOUS", null);
+        defer start.deinit();
+        const response = try auth.anonymous.initialResponseAlloc(self.allocator, trace);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateCramMd5(self: *Client, username: []const u8, password: []const u8) !void {
+        var start = try self.runAuthenticate("CRAM-MD5", null);
+        defer start.deinit();
+        const response = try auth.crammd5.responseAlloc(self.allocator, username, password, std.mem.trim(u8, start.continuation, " "));
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateXOAuth2(self: *Client, user: []const u8, access_token: []const u8) !void {
+        var start = try self.runAuthenticate("XOAUTH2", null);
+        defer start.deinit();
+        const response = try auth.xoauth2.initialResponseAlloc(self.allocator, user, access_token);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
+    }
+
+    pub fn authenticateOAuthBearer(self: *Client, user: []const u8, access_token: []const u8, host: ?[]const u8, port: ?u16) !void {
+        var start = try self.runAuthenticate("OAUTHBEARER", null);
+        defer start.deinit();
+        const response = try auth.oauthbearer.initialResponseAlloc(self.allocator, user, access_token, host, port);
+        defer self.allocator.free(response);
+        try self.transport.writeAll(response);
+        try self.transport.writeAll("\r\n");
+        try self.finishAuthenticate(&start.result);
     }
 
     pub fn select(self: *Client, mailbox: []const u8) !imap.SelectData {
@@ -364,6 +404,344 @@ pub const Client = struct {
         return cloneLines(self.allocator, result.untagged.items);
     }
 
+    pub fn sort(self: *Client, criteria: []const imap.SortCriterion, charset: []const u8, search_criteria: []const u8) ![]u32 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SORT (");
+        for (criteria, 0..) |c, i| {
+            if (i != 0) try writer.writeByte(' ');
+            if (c.reverse) try writer.writeAll("REVERSE ");
+            try writer.writeAll(c.key.label());
+        }
+        try writer.print(") {s} {s}", .{ charset, search_criteria });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseSortData(self.allocator, &result);
+    }
+
+    pub fn threadCmd(self: *Client, algorithm: imap.ThreadAlgorithm, charset: []const u8, search_criteria: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.print("THREAD {s} {s} {s}", .{ algorithm.label(), charset, search_criteria });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn getAcl(self: *Client, mailbox: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETACL ");
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn setAcl(self: *Client, mailbox: []const u8, identifier: []const u8, rights: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SETACL ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {s} {s}", .{ identifier, rights });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn deleteAcl(self: *Client, mailbox: []const u8, identifier: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("DELETEACL ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {s}", .{identifier});
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn listRights(self: *Client, mailbox: []const u8, identifier: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("LISTRIGHTS ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {s}", .{identifier});
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn myRights(self: *Client, mailbox: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("MYRIGHTS ");
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn getQuota(self: *Client, root: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETQUOTA ");
+        try wire.writeQuoted(writer, root);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn setQuota(self: *Client, root: []const u8, resources: []const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SETQUOTA ");
+        try wire.writeQuoted(writer, root);
+        try writer.print(" ({s})", .{resources});
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn getQuotaRoot(self: *Client, mailbox: []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETQUOTAROOT ");
+        try wire.writeQuoted(writer, mailbox);
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn getMetadata(self: *Client, mailbox: []const u8, entries: []const []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("GETMETADATA ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.writeAll(" (");
+        for (entries, 0..) |entry, i| {
+            if (i != 0) try writer.writeByte(' ');
+            try wire.writeQuoted(writer, entry);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn setMetadata(self: *Client, mailbox: []const u8, entries: []const [2][]const u8) !void {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("SETMETADATA ");
+        try wire.writeQuoted(writer, mailbox);
+        try writer.writeAll(" (");
+        for (entries, 0..) |entry, i| {
+            if (i != 0) try writer.writeByte(' ');
+            try wire.writeQuoted(writer, entry[0]);
+            try writer.writeByte(' ');
+            try wire.writeQuoted(writer, entry[1]);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn compress(self: *Client) !void {
+        var result = try self.runSimple("COMPRESS DEFLATE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    pub fn unauthenticate(self: *Client) !void {
+        var result = try self.runSimple("UNAUTHENTICATE");
+        defer result.deinit();
+        try self.ensureOk(&result);
+        self.state = .not_authenticated;
+    }
+
+    pub fn replaceMsg(self: *Client, set: []const u8, mailbox: []const u8, bytes: []const u8) !imap.AppendData {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("REPLACE ");
+        try writer.writeAll(set);
+        try writer.writeByte(' ');
+        try wire.writeQuoted(writer, mailbox);
+        try writer.print(" {{{d}}}", .{bytes.len});
+
+        var result = try self.runCommand(command.items, bytes);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseAppendData(&result);
+    }
+
+    pub fn starttls(self: *Client) !void {
+        var result = try self.runSimple("STARTTLS");
+        defer result.deinit();
+        try self.ensureOk(&result);
+    }
+
+    // --- Capability convenience methods (matching Go client) ---
+
+    pub fn hasCap(self: *const Client, name: []const u8) bool {
+        return self.capabilities.has(name);
+    }
+
+    pub fn supportsIdle(self: *const Client) bool {
+        return self.hasCap("IDLE");
+    }
+
+    pub fn supportsMove(self: *const Client) bool {
+        return self.hasCap("MOVE");
+    }
+
+    pub fn supportsLiteralPlus(self: *const Client) bool {
+        return self.hasCap("LITERAL+");
+    }
+
+    pub fn supportsUIDPlus(self: *const Client) bool {
+        return self.hasCap("UIDPLUS");
+    }
+
+    pub fn supportsCondStore(self: *const Client) bool {
+        return self.hasCap("CONDSTORE");
+    }
+
+    pub fn supportsQResync(self: *const Client) bool {
+        return self.hasCap("QRESYNC");
+    }
+
+    pub fn supportsNamespace(self: *const Client) bool {
+        return self.hasCap("NAMESPACE");
+    }
+
+    pub fn supportsSort(self: *const Client) bool {
+        return self.hasCap("SORT");
+    }
+
+    pub fn supportsID(self: *const Client) bool {
+        return self.hasCap("ID");
+    }
+
+    pub fn supportsEnable(self: *const Client) bool {
+        return self.hasCap("ENABLE");
+    }
+
+    pub fn supportsStartTLS(self: *const Client) bool {
+        return self.hasCap("STARTTLS");
+    }
+
+    pub fn supportsCompress(self: *const Client) bool {
+        return self.hasCap("COMPRESS=DEFLATE");
+    }
+
+    // --- UID command variants ---
+
+    pub fn uidFetch(self: *Client, set: []const u8, items: []const u8) ![][]u8 {
+        const command = try std.fmt.allocPrint(self.allocator, "UID FETCH {s} {s}", .{ set, items });
+        defer self.allocator.free(command);
+
+        var result = try self.runCommand(command, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn uidStore(self: *Client, set: []const u8, operation: []const u8, uid_flags: []const []const u8) ![][]u8 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.print("UID STORE {s} {s} (", .{ set, operation });
+        for (uid_flags, 0..) |flag, index| {
+            if (index != 0) try writer.writeByte(' ');
+            try writer.writeAll(flag);
+        }
+        try writer.writeByte(')');
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn uidCopy(self: *Client, set: []const u8, destination: []const u8) !imap.CopyData {
+        return self.copyLike("UID COPY", set, destination);
+    }
+
+    pub fn uidMove(self: *Client, set: []const u8, destination: []const u8) !imap.CopyData {
+        return self.copyLike("UID MOVE", set, destination);
+    }
+
+    pub fn uidExpunge(self: *Client, uid_set: []const u8) ![][]u8 {
+        const command = try std.fmt.allocPrint(self.allocator, "UID EXPUNGE {s}", .{uid_set});
+        defer self.allocator.free(command);
+
+        var result = try self.runCommand(command, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return cloneLines(self.allocator, result.untagged.items);
+    }
+
+    pub fn uidSearch(self: *Client, criteria: []const u8) ![]u32 {
+        const command = try std.fmt.allocPrint(self.allocator, "UID SEARCH {s}", .{criteria});
+        defer self.allocator.free(command);
+
+        var result = try self.runCommand(command, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseSearchData(self.allocator, &result);
+    }
+
+    pub fn uidSort(self: *Client, criteria: []const imap.SortCriterion, charset: []const u8, search_criteria: []const u8) ![]u32 {
+        var command: std.ArrayList(u8) = .empty;
+        defer command.deinit(self.allocator);
+        const writer = command.writer(self.allocator);
+        try writer.writeAll("UID SORT (");
+        for (criteria, 0..) |c, i| {
+            if (i != 0) try writer.writeByte(' ');
+            if (c.reverse) try writer.writeAll("REVERSE ");
+            try writer.writeAll(c.key.label());
+        }
+        try writer.print(") {s} {s}", .{ charset, search_criteria });
+
+        var result = try self.runCommand(command.items, null);
+        defer result.deinit();
+        try self.ensureOk(&result);
+        return parseSortData(self.allocator, &result);
+    }
+
     fn readGreeting(self: *Client) !void {
         const line = try self.reader.readLineAlloc();
         defer self.allocator.free(line);
@@ -408,7 +786,7 @@ pub const Client = struct {
         return self.runCommand(command, null);
     }
 
-    fn runAuthenticate(self: *Client, mechanism: []const u8, initial: ?[]const u8) !CommandResult {
+    fn runAuthenticate(self: *Client, mechanism: []const u8, initial: ?[]const u8) !AuthenticateStart {
         var command: std.ArrayList(u8) = .empty;
         defer command.deinit(self.allocator);
         const writer = command.writer(self.allocator);
@@ -431,10 +809,15 @@ pub const Client = struct {
             defer self.allocator.free(cont);
             return error.InvalidAuthenticateContinuation;
         }
-        self.allocator.free(cont);
-        return CommandResult{
+        const trimmed = std.mem.trimLeft(u8, if (cont.len > 1) cont[1..] else "", " ");
+        defer self.allocator.free(cont);
+        return AuthenticateStart{
             .allocator = self.allocator,
-            .tagged = .{ .kind = .bad, .tag = try self.allocator.dupe(u8, tag), .text = &.{} },
+            .continuation = try self.allocator.dupe(u8, trimmed),
+            .result = .{
+                .allocator = self.allocator,
+                .tagged = .{ .kind = .bad, .tag = try self.allocator.dupe(u8, tag), .text = &.{} },
+            },
         };
     }
 
@@ -567,6 +950,18 @@ pub const CommandResult = struct {
                 imap.freeStatus(self.allocator, &self.tagged);
             }
         }
+    }
+};
+
+const AuthenticateStart = struct {
+    allocator: std.mem.Allocator,
+    continuation: []u8,
+    result: CommandResult,
+
+    fn deinit(self: *AuthenticateStart) void {
+        self.allocator.free(self.continuation);
+        self.result.deinit();
+        self.* = undefined;
     }
 };
 
@@ -709,6 +1104,23 @@ fn cloneLines(allocator: std.mem.Allocator, lines: []const []u8) ![][]u8 {
         try out.append(allocator, try allocator.dupe(u8, line));
     }
     return out.toOwnedSlice(allocator);
+}
+
+fn parseSortData(allocator: std.mem.Allocator, result: *const CommandResult) ![]u32 {
+    for (result.untagged.items) |line| {
+        if (!std.mem.startsWith(u8, line, "* SORT")) continue;
+        const suffix = std.mem.trimLeft(u8, line["* SORT".len..], " ");
+        if (suffix.len == 0) return allocator.alloc(u32, 0);
+
+        var values: std.ArrayList(u32) = .empty;
+        errdefer values.deinit(allocator);
+        var it = std.mem.tokenizeAny(u8, suffix, " ");
+        while (it.next()) |token| {
+            try values.append(allocator, try std.fmt.parseInt(u32, token, 10));
+        }
+        return values.toOwnedSlice(allocator);
+    }
+    return error.InvalidSortResponse;
 }
 
 fn parseUidCsvAlloc(allocator: std.mem.Allocator, text: []const u8) ![]const imap.UID {

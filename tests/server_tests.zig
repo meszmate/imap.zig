@@ -68,7 +68,7 @@ test "server login select search and logout" {
     var server = imap.server.Server.init(std.testing.allocator, &store);
     try server.serveTransport(transport.transport());
 
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE SASL-IR AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL AUTH=CRAM-MD5 AUTH=XOAUTH2 AUTH=OAUTHBEARER AUTH=ANONYMOUS SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE]") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK LOGIN completed") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 EXISTS") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1") != null);
@@ -144,4 +144,171 @@ test "server authenticate plain succeeds" {
     try server.serveTransport(transport.transport());
 
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK AUTHENTICATE completed") != null);
+}
+
+test "server authenticate cram md5 and xoauth2 succeed" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const cram = try imap.auth.crammd5.responseAlloc(std.testing.allocator, "user", "pass", "PGltYXAuemlnQGxvY2FsaG9zdD4=");
+    defer std.testing.allocator.free(cram);
+    const xoauth = try imap.auth.xoauth2.initialResponseAlloc(std.testing.allocator, "user", "pass");
+    defer std.testing.allocator.free(xoauth);
+
+    const script = try std.fmt.allocPrint(
+        std.testing.allocator,
+        "A001 AUTHENTICATE CRAM-MD5\r\n{s}\r\nA002 UNAUTHENTICATE\r\nA003 AUTHENTICATE XOAUTH2\r\n{s}\r\nA004 LOGOUT\r\n",
+        .{ cram, xoauth },
+    );
+    defer std.testing.allocator.free(script);
+
+    var transport = ScriptTransport.init(std.testing.allocator, script);
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "+ PGltYXAuemlnQGxvY2FsaG9zdD4=") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK AUTHENTICATE completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A003 OK AUTHENTICATE completed") != null);
+}
+
+test "server sort thread acl quota metadata" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const user = try store.authenticate("user", "pass");
+    const inbox = user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage("Subject: Zebra\r\nMessage-ID: <z1>\r\n\r\nBody", &.{}, 5);
+    _ = try inbox.appendMessage("Subject: alpha\r\nMessage-ID: <a1>\r\nIn-Reply-To: <z1>\r\n\r\nBody", &.{}, 10);
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 SELECT \"INBOX\"\r\n" ++
+            "A003 SORT (SUBJECT) UTF-8 ALL\r\n" ++
+            "A004 THREAD REFERENCES UTF-8 ALL\r\n" ++
+            "A005 SETACL \"INBOX\" friend lr\r\n" ++
+            "A006 GETACL \"INBOX\"\r\n" ++
+            "A007 MYRIGHTS \"INBOX\"\r\n" ++
+            "A008 SETQUOTA \"\" (STORAGE 2048 MESSAGE 25)\r\n" ++
+            "A009 GETQUOTA \"\"\r\n" ++
+            "A010 GETQUOTAROOT \"INBOX\"\r\n" ++
+            "A011 SETMETADATA \"INBOX\" (/private/comment \"test\")\r\n" ++
+            "A012 GETMETADATA \"INBOX\" (/private/comment)\r\n" ++
+            "A013 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SORT 2 1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* THREAD (1 (2))") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* ACL INBOX user lrswipdkxtea friend lr") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* MYRIGHTS") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTA \"\" (STORAGE") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "MESSAGE 2 25") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* QUOTAROOT") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* METADATA INBOX (\"/private/comment\" \"test\")") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A012 OK GETMETADATA completed") != null);
+}
+
+test "server starttls compress unauthenticate" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 STARTTLS\r\n" ++
+            "A002 LOGIN \"user\" \"pass\"\r\n" ++
+            "A003 COMPRESS DEFLATE\r\n" ++
+            "A004 UNAUTHENTICATE\r\n" ++
+            "A005 LOGIN \"user\" \"pass\"\r\n" ++
+            "A006 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK Begin TLS negotiation now") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A003 OK COMPRESS completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A004 OK UNAUTHENTICATE completed") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A005 OK LOGIN completed") != null);
+}
+
+test "server search with larger smaller and header" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const user = try store.authenticate("user", "pass");
+    const inbox = user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage("Subject: tiny\r\n\r\nhi", &.{}, 0);
+    _ = try inbox.appendMessage("Subject: big\r\n\r\n" ++ "X" ** 200, &.{}, 0);
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 SELECT \"INBOX\"\r\n" ++
+            "A003 SEARCH LARGER 100\r\n" ++
+            "A004 SEARCH SMALLER 50\r\n" ++
+            "A005 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    // Message 2 is > 100 bytes
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 2") != null);
+    // Message 1 is < 50 bytes
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1\r\n") != null);
+}
+
+test "dispatcher register and dispatch" {
+    var dispatcher = imap.server.Dispatcher.init(std.testing.allocator);
+    defer dispatcher.deinit();
+
+    try dispatcher.register("NOOP", struct {
+        fn handle(ctx: *imap.server.CommandContext) !void {
+            try ctx.transport.print("{s} OK NOOP completed\r\n", .{ctx.tag});
+        }
+    }.handle);
+
+    try std.testing.expect(dispatcher.get("NOOP") != null);
+    try std.testing.expect(dispatcher.get("noop") != null);
+    try std.testing.expect(dispatcher.get("UNKNOWN") == null);
+}
+
+test "tracker queue and flush" {
+    var session_tracker = imap.server.SessionTracker.init(std.testing.allocator);
+    defer session_tracker.deinit();
+
+    try session_tracker.queueUpdate(.{ .kind = .exists, .num_messages = 5 });
+    try session_tracker.queueUpdate(.{ .kind = .exists, .num_messages = 6 });
+
+    try std.testing.expect(session_tracker.hasPendingUpdates());
+    try std.testing.expectEqual(@as(usize, 2), session_tracker.updates.items.len);
+}
+
+test "fetch writer output" {
+    var transport = ScriptTransport.init(std.testing.allocator, "");
+    defer transport.deinit();
+
+    var writer = imap.server.FetchWriter.init(std.testing.allocator, transport.transport());
+    try writer.writeFlags(1, &.{ "\\Seen", "\\Flagged" });
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 FETCH (FLAGS (\\Seen \\Flagged))") != null);
+}
+
+test "server options defaults" {
+    const opts = imap.server.Options{};
+    try std.testing.expectEqualStrings("imap.zig ready", opts.greeting_text);
+    try std.testing.expectEqual(@as(u64, 0), opts.max_literal_size);
+    try std.testing.expectEqual(false, opts.allow_insecure_auth);
 }

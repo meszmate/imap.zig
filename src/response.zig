@@ -59,6 +59,16 @@ pub const codes = struct {
     pub const clientbug = "CLIENTBUG";
     pub const cannot = "CANNOT";
     pub const limit = "LIMIT";
+    pub const haschildren = "HASCHILDREN";
+    pub const metadatatoobig = "METADATA TOOBIG";
+    pub const metadatalongentries = "METADATA LONGENTRIES";
+    pub const metadatamaxsize = "METADATA MAXSIZE";
+    pub const notsaved = "NOTSAVED";
+    pub const mailboxid = "MAILBOXID";
+    pub const objectid = "OBJECTID";
+    pub const inprogress = "INPROGRESS";
+    pub const uidrequired = "UIDREQUIRED";
+    pub const noupdate = "NOUPDATE";
 };
 
 pub fn parseStatusLine(allocator: std.mem.Allocator, line: []const u8) !StatusResponse {

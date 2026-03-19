@@ -128,10 +128,10 @@ pub fn commandAllowedStates(command: []const u8) []const imap.ConnState {
     if (eqAny(command, &.{ "STARTTLS", "AUTHENTICATE", "LOGIN" })) {
         return &.{.not_authenticated};
     }
-    if (eqAny(command, &.{ "ENABLE", "SELECT", "EXAMINE", "CREATE", "DELETE", "RENAME", "SUBSCRIBE", "UNSUBSCRIBE", "LIST", "LSUB", "NAMESPACE", "STATUS", "APPEND", "IDLE", "ID" })) {
+    if (eqAny(command, &.{ "ENABLE", "SELECT", "EXAMINE", "CREATE", "DELETE", "RENAME", "SUBSCRIBE", "UNSUBSCRIBE", "LIST", "LSUB", "NAMESPACE", "STATUS", "APPEND", "IDLE", "ID", "GETACL", "SETACL", "DELETEACL", "LISTRIGHTS", "MYRIGHTS", "GETQUOTA", "SETQUOTA", "GETQUOTAROOT", "GETMETADATA", "SETMETADATA", "COMPRESS", "UNAUTHENTICATE" })) {
         return &.{ .authenticated, .selected };
     }
-    if (eqAny(command, &.{ "CLOSE", "UNSELECT", "EXPUNGE", "SEARCH", "FETCH", "STORE", "COPY", "MOVE", "SORT", "THREAD", "UID" })) {
+    if (eqAny(command, &.{ "CLOSE", "UNSELECT", "EXPUNGE", "SEARCH", "FETCH", "STORE", "COPY", "MOVE", "SORT", "THREAD", "REPLACE", "UID" })) {
         return &.{.selected};
     }
     return &.{};
