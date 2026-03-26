@@ -3,6 +3,7 @@ pub const fsstore = @import("fsstore.zig");
 pub const pgstore = @import("pgstore.zig");
 pub const interface = @import("interface.zig");
 pub const adapter = @import("adapter.zig");
+pub const helpers = @import("helpers.zig");
 
 pub const MemStore = memstore.MemStore;
 pub const User = memstore.User;

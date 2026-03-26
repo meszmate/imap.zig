@@ -135,6 +135,8 @@ pub const SessionAdapter = struct {
             .subject = extractHeader(body, "Subject"),
             .message_id = extractHeader(body, "Message-ID"),
             .in_reply_to = extractHeader(body, "In-Reply-To"),
+            // Note: address fields point into the body slice (no allocation).
+            // For full address parsing, use parseAddressListAlloc.
         };
     }
 
@@ -298,3 +300,77 @@ pub const ProtocolAdapter = struct {
         return self.user.?.unsubscribeMailbox(name);
     }
 };
+
+/// Parse an email address string like "Display Name <user@host>" or "user@host"
+/// into an Address struct.
+pub fn parseAddress(raw: []const u8) imap.Address {
+    const trimmed = std.mem.trim(u8, raw, " \t");
+    if (trimmed.len == 0) return .{};
+
+    // Try "Display Name <user@host>" format
+    if (std.mem.indexOfScalar(u8, trimmed, '<')) |angle_start| {
+        const display = std.mem.trim(u8, trimmed[0..angle_start], " \t\"");
+        const angle_end = std.mem.indexOfScalar(u8, trimmed, '>') orelse trimmed.len;
+        const email = trimmed[angle_start + 1 .. angle_end];
+        if (std.mem.indexOfScalar(u8, email, '@')) |at| {
+            return .{ .name = display, .mailbox = email[0..at], .host = email[at + 1 ..] };
+        }
+        return .{ .name = display, .mailbox = email };
+    }
+
+    // Try bare "user@host" format
+    if (std.mem.indexOfScalar(u8, trimmed, '@')) |at| {
+        return .{ .mailbox = trimmed[0..at], .host = trimmed[at + 1 ..] };
+    }
+
+    return .{ .mailbox = trimmed };
+}
+
+/// Parse a comma-separated list of email addresses.
+pub fn parseAddressListAlloc(allocator: std.mem.Allocator, raw: []const u8) ![]imap.Address {
+    if (raw.len == 0) return allocator.alloc(imap.Address, 0);
+    var addrs: std.ArrayList(imap.Address) = .empty;
+    errdefer addrs.deinit(allocator);
+    var it = std.mem.splitScalar(u8, raw, ',');
+    while (it.next()) |part| {
+        const addr = parseAddress(part);
+        if (addr.mailbox.len > 0 or addr.name.len > 0) {
+            try addrs.append(allocator, addr);
+        }
+    }
+    return addrs.toOwnedSlice(allocator);
+}
+
+/// Extract headers that DON'T match the given field names (HEADER.FIELDS.NOT).
+pub fn extractHeaderFieldsNotAlloc(allocator: std.mem.Allocator, body: []const u8, fields: []const []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var it = std.mem.splitSequence(u8, body, "\r\n");
+    while (it.next()) |line| {
+        if (line.len == 0) break;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = std.mem.trim(u8, line[0..colon], " ");
+        var excluded = false;
+        for (fields) |field| {
+            if (std.ascii.eqlIgnoreCase(name, field)) {
+                excluded = true;
+                break;
+            }
+        }
+        if (!excluded) {
+            try out.appendSlice(allocator, line);
+            try out.appendSlice(allocator, "\r\n");
+        }
+    }
+    try out.appendSlice(allocator, "\r\n");
+    return out.toOwnedSlice(allocator);
+}
+
+/// Split message body into header bytes and text bytes.
+pub fn headerBytes(body: []const u8) []const u8 {
+    return SessionAdapter.extractHeaders(body);
+}
+
+pub fn textBytes(body: []const u8) []const u8 {
+    return SessionAdapter.extractText(body);
+}
