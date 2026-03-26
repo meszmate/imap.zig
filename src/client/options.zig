@@ -1,4 +1,5 @@
 const std = @import("std");
+const wire = @import("../wire/root.zig");
 
 /// Callback function types for unsolicited server responses.
 pub const ExistsHandler = *const fn (num_messages: u32) void;
@@ -32,6 +33,9 @@ pub const Options = struct {
 
     /// Enable debug logging of wire traffic.
     debug_log: bool = false,
+
+    /// TLS configuration for STARTTLS and direct TLS connections.
+    tls_options: ?wire.TlsOptions = null,
 
     pub fn defaultOptions() Options {
         return .{};

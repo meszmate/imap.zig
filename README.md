@@ -8,8 +8,8 @@
 It is designed as a practical foundation for both IMAP tooling and embedded mail services:
 
 - IMAP4rev1-oriented protocol types, status parsing, number set parsing, modified UTF-7 mailbox handling, and a broader registry-backed capability surface
-- Public wire package with encoder/decoder primitives, literal handling, line reading, transports, and modified UTF-7
-- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`; UID command variants (`uidFetch`, `uidStore`, `uidCopy`, `uidMove`, `uidExpunge`, `uidSearch`, `uidSort`) and capability convenience methods (`hasCap`, `supportsIdle`, `supportsMove`, etc.)
+- Public wire package with encoder/decoder primitives, literal handling, line reading, transports (plain TCP and TLS via `std.crypto.tls`), and modified UTF-7
+- Synchronous client with greeting parsing, tagged command execution, and helpers for `CAPABILITY`, `NOOP`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `SELECT`/`EXAMINE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `NAMESPACE`, `ID`, `ENABLE`, `STATUS`, `APPEND`, `SEARCH`, `FETCH`, `IDLE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, `REPLACE`, and `LOGOUT`; UID command variants (`uidFetch`, `uidStore`, `uidCopy`, `uidMove`, `uidExpunge`, `uidSearch`, `uidSort`), capability convenience methods (`hasCap`, `supportsIdle`, `supportsMove`, etc.), and TLS support (`connectTls` for implicit TLS, `starttls` for STARTTLS upgrade)
 - In-memory server and store with core commands including `CAPABILITY`, `NOOP`, `LOGOUT`, `LOGIN`, `AUTHENTICATE` (`PLAIN`, `LOGIN`, `EXTERNAL`, `ANONYMOUS`, `CRAM-MD5`, `XOAUTH2`, `OAUTHBEARER`), `NAMESPACE`, `ID`, `ENABLE`, `LIST`, `LSUB`, `CREATE`, `DELETE`, `RENAME`, `SUBSCRIBE`, `UNSUBSCRIBE`, `SELECT`, `EXAMINE`, `STATUS`, `APPEND`, `IDLE`, `UNSELECT`, `CLOSE`, `SEARCH`, `FETCH`, `STORE`, `COPY`, `MOVE`, `EXPUNGE`, `SORT`, `THREAD`, `GETACL`, `SETACL`, `DELETEACL`, `LISTRIGHTS`, `MYRIGHTS`, `GETQUOTA`, `SETQUOTA`, `GETQUOTAROOT`, `GETMETADATA`, `SETMETADATA`, `COMPRESS`, `STARTTLS`, `UNAUTHENTICATE`, and `REPLACE`; server Options, Dispatcher, specialized Writers (FetchWriter, ListWriter, UpdateWriter, ExpungeWriter, MoveWriter), and Trackers (MailboxTracker, SessionTracker)
 - Auth namespace with mechanism helpers for `ANONYMOUS`, `CRAM-MD5`, `EXTERNAL`, `LOGIN`, `OAUTHBEARER`, `PLAIN`, and `XOAUTH2`
 - Filesystem-backed and optional PostgreSQL-backed store backends in addition to the in-memory reference store, with full message CRUD, flag management, UID tracking, subscriptions, and search
@@ -48,7 +48,8 @@ Implemented now:
 - ACL commands (GETACL, SETACL, DELETEACL, LISTRIGHTS, MYRIGHTS) backed by mailbox ACL state
 - QUOTA commands (GETQUOTA, SETQUOTA, GETQUOTAROOT) backed by per-user quota state
 - METADATA commands (GETMETADATA, SETMETADATA) backed by mailbox metadata state
-- STARTTLS and COMPRESS=DEFLATE command stubs
+- STARTTLS with actual TLS upgrade via `std.crypto.tls.Client` (client) and callback-based upgrade (server); implicit TLS (`connectTls`, `listenAndServeTls`), dynamic capability advertisement, and LOGINDISABLED enforcement
+- COMPRESS=DEFLATE command stub
 - UNAUTHENTICATE for session reset
 - REPLACE for atomic message replacement
 - Literal+/Literal- marker parsing (RFC 7888)
@@ -63,7 +64,6 @@ Implemented now:
 
 Planned next:
 
-- TLS socket upgrade (STARTTLS negotiation exists but no actual TLS yet)
 - COMPRESS=DEFLATE actual compression layer
 - Richer FETCH/BODYSTRUCTURE parsing
 - IMAP4rev2-specific behavior tightening

@@ -11,6 +11,8 @@ pub const Client = struct {
     state: imap.ConnState = .not_authenticated,
     next_tag: u32 = 1,
     owned_stream: ?*std.net.Stream = null,
+    tls_state: ?*wire.TlsTransport = null,
+    is_tls: bool = false,
 
     pub fn init(allocator: std.mem.Allocator, transport: wire.Transport) !Client {
         var client = Client{
@@ -23,6 +25,7 @@ pub const Client = struct {
         return client;
     }
 
+    /// Connect to an IMAP server over plain TCP.
     pub fn connectTcp(allocator: std.mem.Allocator, host: []const u8, port: u16) !Client {
         const stream_ptr = try allocator.create(std.net.Stream);
         errdefer allocator.destroy(stream_ptr);
@@ -32,11 +35,37 @@ pub const Client = struct {
         return client;
     }
 
+    /// Connect to an IMAP server over implicit TLS (typically port 993).
+    pub fn connectTls(allocator: std.mem.Allocator, host: []const u8, port: u16, tls_options: wire.TlsOptions) !Client {
+        const stream_ptr = try allocator.create(std.net.Stream);
+        errdefer allocator.destroy(stream_ptr);
+        stream_ptr.* = try std.net.tcpConnectToHost(allocator, host, port);
+        errdefer stream_ptr.close();
+
+        const tls_state = try wire.TlsTransport.init(allocator, stream_ptr.*, tls_options);
+        errdefer tls_state.deinitAndClose();
+
+        var client = try Client.init(allocator, tls_state.transport());
+        client.owned_stream = stream_ptr;
+        client.tls_state = tls_state;
+        client.is_tls = true;
+        return client;
+    }
+
     pub fn deinit(self: *Client) void {
         self.capabilities.deinit();
-        self.transport.close() catch {};
-        if (self.owned_stream) |stream| {
-            self.allocator.destroy(stream);
+        if (self.tls_state) |tls_st| {
+            // TLS transport close also closes the underlying stream
+            tls_st.deinit();
+            if (self.owned_stream) |stream| {
+                stream.close();
+                self.allocator.destroy(stream);
+            }
+        } else {
+            self.transport.close() catch {};
+            if (self.owned_stream) |stream| {
+                self.allocator.destroy(stream);
+            }
         }
         self.* = undefined;
     }
@@ -607,10 +636,30 @@ pub const Client = struct {
         return parseAppendData(&result);
     }
 
-    pub fn starttls(self: *Client) !void {
+    /// Upgrade the connection to TLS via the STARTTLS command.
+    /// After a successful upgrade, the transport and reader are replaced
+    /// with TLS-encrypted equivalents. Callers should re-fetch capabilities
+    /// afterwards since they may change.
+    pub fn starttls(self: *Client, tls_options: ?wire.TlsOptions) !void {
+        if (self.is_tls) return error.AlreadyTls;
+
         var result = try self.runSimple("STARTTLS");
         defer result.deinit();
         try self.ensureOk(&result);
+
+        // The server said OK — now upgrade the underlying TCP connection to TLS.
+        // We need the raw std.net.Stream from the current transport.
+        const stream = self.owned_stream orelse return error.NoOwnedStream;
+
+        const opts = tls_options orelse wire.TlsOptions{};
+        const tls_state = try wire.TlsTransport.init(self.allocator, stream.*, opts);
+        errdefer tls_state.deinit();
+
+        // Swap transport and reader to use the TLS connection
+        self.tls_state = tls_state;
+        self.transport = tls_state.transport();
+        self.reader = wire.LineReader.init(self.allocator, self.transport);
+        self.is_tls = true;
     }
 
     // --- Capability convenience methods (matching Go client) ---

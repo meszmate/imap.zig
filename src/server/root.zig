@@ -13,6 +13,7 @@ pub const Command = conn.Command;
 pub const SessionState = session.SessionState;
 pub const Placeholder = server.Placeholder;
 pub const Options = options.Options;
+pub const TlsUpgradeFn = options.TlsUpgradeFn;
 pub const FetchWriter = writers.FetchWriter;
 pub const ListWriter = writers.ListWriter;
 pub const UpdateWriter = writers.UpdateWriter;

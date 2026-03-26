@@ -5,6 +5,7 @@ pub const SessionState = struct {
     state: types.ConnState = .not_authenticated,
     selected_mailbox: ?[]const u8 = null,
     read_only: bool = false,
+    is_tls: bool = false,
 
     pub fn canExecute(self: *const SessionState, command: []const u8) bool {
         const allowed = state_machine.commandAllowedStates(command);
