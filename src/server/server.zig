@@ -9,6 +9,8 @@ pub const Server = struct {
     allocator: std.mem.Allocator,
     store: *memstore.MemStore,
     options: Options,
+    shutdown_requested: bool = false,
+    active_connections: u32 = 0,
 
     pub fn init(allocator: std.mem.Allocator, store: *memstore.MemStore) Server {
         return .{
@@ -24,6 +26,18 @@ pub const Server = struct {
             .store = store,
             .options = options,
         };
+    }
+
+    pub fn shutdown(self: *Server) void {
+        self.shutdown_requested = true;
+    }
+
+    pub fn isShutdown(self: *const Server) bool {
+        return self.shutdown_requested;
+    }
+
+    pub fn activeConnections(self: *const Server) u32 {
+        return self.active_connections;
     }
 
     fn currentCapabilities(self: *Server, session: *const SessionState) []const u8 {
@@ -904,10 +918,15 @@ pub const Server = struct {
         var listener = try address.listen(.{ .reuse_address = true });
         defer listener.deinit();
 
-        while (true) {
-            var connection = try listener.accept();
+        while (!self.shutdown_requested) {
+            var connection = listener.accept() catch |err| {
+                if (self.shutdown_requested) break;
+                return err;
+            };
             defer connection.stream.close();
-            try self.serveStream(&connection.stream);
+            self.active_connections += 1;
+            defer self.active_connections -= 1;
+            self.serveStream(&connection.stream) catch {};
         }
     }
 
@@ -921,11 +940,16 @@ pub const Server = struct {
         var listener = try address.listen(.{ .reuse_address = true });
         defer listener.deinit();
 
-        while (true) {
-            var connection = try listener.accept();
+        while (!self.shutdown_requested) {
+            var connection = listener.accept() catch |err| {
+                if (self.shutdown_requested) break;
+                return err;
+            };
             defer connection.stream.close();
+            self.active_connections += 1;
+            defer self.active_connections -= 1;
             const tls_transport = try upgrade_fn(upgrade_ctx, connection.stream);
-            try self.serveConnection(tls_transport, connection.stream, true);
+            self.serveConnection(tls_transport, connection.stream, true) catch {};
         }
     }
 
@@ -1044,38 +1068,120 @@ pub const Server = struct {
             const selector = if (uid_mode) message.uid else seq;
             if (!set.contains(selector)) continue;
 
-            var buf: [2048]u8 = undefined;
-            var stream = std.io.fixedBufferStream(&buf);
-            const writer = stream.writer();
-            try writer.print("* {d} FETCH (", .{seq});
-            var parts = std.mem.tokenizeAny(u8, items, " ");
+            try transport.print("* {d} FETCH (", .{seq});
             var first = true;
+
+            // Collect fetch item tokens, rejoining BODY[...] sections that contain spaces
+            var fetch_items: std.ArrayList([]const u8) = .empty;
+            defer fetch_items.deinit(self.allocator);
+            var parts = std.mem.tokenizeAny(u8, items, " ");
             while (parts.next()) |part| {
-                if (!first) try writer.writeByte(' ');
+                // Check if this starts a BODY[ or BODY.PEEK[ that hasn't been closed
+                if ((std.ascii.startsWithIgnoreCase(part, "BODY[") or std.ascii.startsWithIgnoreCase(part, "BODY.PEEK[")) and std.mem.indexOfScalar(u8, part, ']') == null) {
+                    // Collect parts until we find the closing ]
+                    var combined: std.ArrayList(u8) = .empty;
+                    defer combined.deinit(self.allocator);
+                    try combined.appendSlice(self.allocator, part);
+                    while (parts.next()) |next_part| {
+                        try combined.append(self.allocator, ' ');
+                        try combined.appendSlice(self.allocator, next_part);
+                        if (std.mem.indexOfScalar(u8, next_part, ']') != null) break;
+                    }
+                    try fetch_items.append(self.allocator, try self.allocator.dupe(u8, combined.items));
+                } else {
+                    try fetch_items.append(self.allocator, try self.allocator.dupe(u8, part));
+                }
+            }
+            defer for (fetch_items.items) |item| self.allocator.free(item);
+
+            for (fetch_items.items) |part| {
+                if (!first) try transport.writeAll(" ");
                 first = false;
                 if (std.ascii.eqlIgnoreCase(part, "FLAGS")) {
-                    try writer.writeAll("FLAGS (");
+                    try transport.writeAll("FLAGS (");
                     for (message.flags.items, 0..) |flag, flag_index| {
-                        if (flag_index != 0) try writer.writeByte(' ');
-                        try writer.writeAll(flag);
+                        if (flag_index != 0) try transport.writeAll(" ");
+                        try transport.writeAll(flag);
                     }
-                    try writer.writeByte(')');
+                    try transport.writeAll(")");
                 } else if (std.ascii.eqlIgnoreCase(part, "UID")) {
-                    try writer.print("UID {d}", .{message.uid});
+                    try transport.print("UID {d}", .{message.uid});
                 } else if (std.ascii.eqlIgnoreCase(part, "RFC822.SIZE")) {
-                    try writer.print("RFC822.SIZE {d}", .{message.body.len});
+                    try transport.print("RFC822.SIZE {d}", .{message.body.len});
                 } else if (std.ascii.eqlIgnoreCase(part, "INTERNALDATE")) {
                     var date_buf: [64]u8 = undefined;
                     const formatted = try imap.formatInternalDateUnix(&date_buf, message.internal_date_unix);
-                    try writer.print("INTERNALDATE \"{s}\"", .{formatted});
-                } else if (std.ascii.eqlIgnoreCase(part, "BODY[]") or std.ascii.eqlIgnoreCase(part, "BODY.PEEK[]")) {
-                    const escaped = try escapeForQuoted(self.allocator, message.body);
-                    defer self.allocator.free(escaped);
-                    try writer.print("BODY[] \"{s}\"", .{escaped});
+                    try transport.print("INTERNALDATE \"{s}\"", .{formatted});
+                } else if (std.ascii.eqlIgnoreCase(part, "ENVELOPE")) {
+                    try writeEnvelope(transport, message.body);
+                } else if (std.ascii.startsWithIgnoreCase(part, "BODY[") or std.ascii.startsWithIgnoreCase(part, "BODY.PEEK[")) {
+                    const is_peek = std.ascii.startsWithIgnoreCase(part, "BODY.PEEK[");
+                    _ = is_peek;
+                    const prefix_len: usize = if (std.ascii.startsWithIgnoreCase(part, "BODY.PEEK[")) "BODY.PEEK[".len else "BODY[".len;
+                    const close = std.mem.indexOfScalar(u8, part, ']') orelse part.len;
+                    const section = part[prefix_len..close];
+
+                    // Parse optional partial range <offset.count> after the ]
+                    var partial_offset: ?usize = null;
+                    var partial_count: ?usize = null;
+                    if (close + 1 < part.len and part[close + 1] == '<') {
+                        const rest = part[close + 1 ..];
+                        const angle_end = std.mem.indexOfScalar(u8, rest, '>');
+                        if (angle_end) |ae| {
+                            if (ae > 1) {
+                                const range_str = rest[1..ae];
+                                if (std.mem.indexOfScalar(u8, range_str, '.')) |dot| {
+                                    partial_offset = std.fmt.parseInt(usize, range_str[0..dot], 10) catch null;
+                                    partial_count = std.fmt.parseInt(usize, range_str[dot + 1 ..], 10) catch null;
+                                }
+                            }
+                        }
+                    }
+
+                    var section_data: []const u8 = undefined;
+                    var owned_data: ?[]u8 = null;
+                    defer if (owned_data) |d| self.allocator.free(d);
+
+                    if (section.len == 0) {
+                        section_data = message.body;
+                    } else if (std.ascii.eqlIgnoreCase(section, "HEADER")) {
+                        section_data = extractHeaders(message.body);
+                    } else if (std.ascii.eqlIgnoreCase(section, "TEXT")) {
+                        section_data = extractText(message.body);
+                    } else if (std.ascii.startsWithIgnoreCase(section, "HEADER.FIELDS.NOT ")) {
+                        const fields_str = section["HEADER.FIELDS.NOT ".len..];
+                        owned_data = try extractHeaderFieldsNot(self.allocator, message.body, fields_str);
+                        section_data = owned_data.?;
+                    } else if (std.ascii.startsWithIgnoreCase(section, "HEADER.FIELDS ")) {
+                        const fields_str = section["HEADER.FIELDS ".len..];
+                        owned_data = try extractHeaderFields(self.allocator, message.body, fields_str);
+                        section_data = owned_data.?;
+                    } else {
+                        section_data = message.body;
+                    }
+
+                    // Apply partial range if specified
+                    if (partial_offset) |off| {
+                        if (off >= section_data.len) {
+                            section_data = "";
+                        } else {
+                            const remaining = section_data.len - off;
+                            const count = if (partial_count) |c| @min(c, remaining) else remaining;
+                            section_data = section_data[off .. off + count];
+                        }
+                    }
+
+                    var section_label_buf: [256]u8 = undefined;
+                    const label = std.fmt.bufPrint(&section_label_buf, "BODY[{s}]", .{section}) catch "BODY[]";
+                    if (partial_offset) |off| {
+                        try transport.print("{s}<{d}> {{{d}}}\r\n", .{ label, off, section_data.len });
+                    } else {
+                        try transport.print("{s} {{{d}}}\r\n", .{ label, section_data.len });
+                    }
+                    try transport.writeAll(section_data);
                 }
             }
-            try writer.writeAll(")\r\n");
-            try transport.writeAll(stream.getWritten());
+            try transport.writeAll(")\r\n");
         }
     }
 
@@ -1729,6 +1835,163 @@ fn extractHeader(body: []const u8, header_name: []const u8) []const u8 {
         }
     }
     return "";
+}
+
+fn extractHeaders(body: []const u8) []const u8 {
+    const sep = std.mem.indexOf(u8, body, "\r\n\r\n");
+    if (sep) |s| {
+        return body[0 .. s + 2]; // include trailing \r\n of last header
+    }
+    return body;
+}
+
+fn extractText(body: []const u8) []const u8 {
+    const sep = std.mem.indexOf(u8, body, "\r\n\r\n");
+    if (sep) |s| {
+        return body[s + 4 ..];
+    }
+    return "";
+}
+
+fn extractHeaderFields(allocator: std.mem.Allocator, body: []const u8, fields_spec: []const u8) ![]u8 {
+    const inner = stripOuter(fields_spec, '(', ')');
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var lines = std.mem.splitSequence(u8, body, "\r\n");
+    while (lines.next()) |line| {
+        if (line.len == 0) break;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = std.mem.trim(u8, line[0..colon], " ");
+        var fields_it = std.mem.tokenizeAny(u8, inner, " ");
+        while (fields_it.next()) |field| {
+            if (std.ascii.eqlIgnoreCase(name, field)) {
+                try out.appendSlice(allocator, line);
+                try out.appendSlice(allocator, "\r\n");
+                break;
+            }
+        }
+    }
+    try out.appendSlice(allocator, "\r\n");
+    return out.toOwnedSlice(allocator);
+}
+
+fn extractHeaderFieldsNot(allocator: std.mem.Allocator, body: []const u8, fields_spec: []const u8) ![]u8 {
+    const inner = stripOuter(fields_spec, '(', ')');
+    var out: std.ArrayList(u8) = .empty;
+    errdefer out.deinit(allocator);
+    var lines = std.mem.splitSequence(u8, body, "\r\n");
+    while (lines.next()) |line| {
+        if (line.len == 0) break;
+        const colon = std.mem.indexOfScalar(u8, line, ':') orelse continue;
+        const name = std.mem.trim(u8, line[0..colon], " ");
+        var excluded = false;
+        var fields_it = std.mem.tokenizeAny(u8, inner, " ");
+        while (fields_it.next()) |field| {
+            if (std.ascii.eqlIgnoreCase(name, field)) {
+                excluded = true;
+                break;
+            }
+        }
+        if (!excluded) {
+            try out.appendSlice(allocator, line);
+            try out.appendSlice(allocator, "\r\n");
+        }
+    }
+    try out.appendSlice(allocator, "\r\n");
+    return out.toOwnedSlice(allocator);
+}
+
+fn writeEnvelope(transport: wire.Transport, body: []const u8) !void {
+    try transport.writeAll("ENVELOPE (");
+    // Date
+    try writeQuotedOrNil(transport, extractHeader(body, "Date"));
+    try transport.writeAll(" ");
+    // Subject
+    try writeQuotedOrNil(transport, extractHeader(body, "Subject"));
+    // From
+    try transport.writeAll(" ");
+    try writeAddressField(transport, extractHeader(body, "From"));
+    // Sender (same as From if not specified)
+    try transport.writeAll(" ");
+    const sender = extractHeader(body, "Sender");
+    if (sender.len > 0) {
+        try writeAddressField(transport, sender);
+    } else {
+        try writeAddressField(transport, extractHeader(body, "From"));
+    }
+    // Reply-To (same as From if not specified)
+    try transport.writeAll(" ");
+    const reply_to = extractHeader(body, "Reply-To");
+    if (reply_to.len > 0) {
+        try writeAddressField(transport, reply_to);
+    } else {
+        try writeAddressField(transport, extractHeader(body, "From"));
+    }
+    // To
+    try transport.writeAll(" ");
+    try writeAddressField(transport, extractHeader(body, "To"));
+    // Cc
+    try transport.writeAll(" ");
+    try writeAddressField(transport, extractHeader(body, "Cc"));
+    // Bcc
+    try transport.writeAll(" ");
+    try writeAddressField(transport, extractHeader(body, "Bcc"));
+    // In-Reply-To
+    try transport.writeAll(" ");
+    try writeQuotedOrNil(transport, extractHeader(body, "In-Reply-To"));
+    // Message-ID
+    try transport.writeAll(" ");
+    try writeQuotedOrNil(transport, extractHeader(body, "Message-ID"));
+    try transport.writeAll(")");
+}
+
+fn writeQuotedOrNil(transport: wire.Transport, value: []const u8) !void {
+    if (value.len == 0) {
+        try transport.writeAll("NIL");
+    } else {
+        try transport.writeAll("\"");
+        for (value) |byte| {
+            if (byte == '"' or byte == '\\') {
+                try transport.writeAll(&[_]u8{'\\'});
+            }
+            try transport.writeAll(&[_]u8{byte});
+        }
+        try transport.writeAll("\"");
+    }
+}
+
+fn writeAddressField(transport: wire.Transport, value: []const u8) !void {
+    if (value.len == 0) {
+        try transport.writeAll("NIL");
+        return;
+    }
+    try transport.writeAll("((");
+    // Parse "Display Name <user@host>" or "user@host"
+    if (std.mem.indexOfScalar(u8, value, '<')) |angle_start| {
+        const display = std.mem.trim(u8, value[0..angle_start], " \"");
+        const angle_end = std.mem.indexOfScalar(u8, value, '>') orelse value.len;
+        const email = value[angle_start + 1 .. angle_end];
+        try writeQuotedOrNil(transport, display);
+        try transport.writeAll(" NIL ");
+        if (std.mem.indexOfScalar(u8, email, '@')) |at| {
+            try writeQuotedOrNil(transport, email[0..at]);
+            try transport.writeAll(" ");
+            try writeQuotedOrNil(transport, email[at + 1 ..]);
+        } else {
+            try writeQuotedOrNil(transport, email);
+            try transport.writeAll(" \"\"");
+        }
+    } else if (std.mem.indexOfScalar(u8, value, '@')) |at| {
+        try transport.writeAll("NIL NIL ");
+        try writeQuotedOrNil(transport, value[0..at]);
+        try transport.writeAll(" ");
+        try writeQuotedOrNil(transport, value[at + 1 ..]);
+    } else {
+        try transport.writeAll("NIL NIL ");
+        try writeQuotedOrNil(transport, value);
+        try transport.writeAll(" \"\"");
+    }
+    try transport.writeAll("))");
 }
 
 fn containsAsciiNoCase(haystack: []const u8, needle: []const u8) bool {
