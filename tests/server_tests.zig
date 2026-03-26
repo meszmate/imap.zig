@@ -68,7 +68,7 @@ test "server login select search and logout" {
     var server = imap.server.Server.init(std.testing.allocator, &store);
     try server.serveTransport(transport.transport());
 
-    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE SASL-IR AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL AUTH=CRAM-MD5 AUTH=XOAUTH2 AUTH=OAUTHBEARER AUTH=ANONYMOUS SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA STARTTLS COMPRESS=DEFLATE UNAUTHENTICATE REPLACE]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* OK [CAPABILITY IMAP4rev1 UIDPLUS MOVE NAMESPACE ID UNSELECT IDLE ENABLE SASL-IR AUTH=PLAIN AUTH=LOGIN AUTH=EXTERNAL AUTH=CRAM-MD5 AUTH=XOAUTH2 AUTH=OAUTHBEARER AUTH=ANONYMOUS SORT THREAD=REFERENCES THREAD=ORDEREDSUBJECT ACL QUOTA METADATA COMPRESS=DEFLATE UNAUTHENTICATE REPLACE]") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 OK LOGIN completed") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* 1 EXISTS") != null);
     try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "* SEARCH 1") != null);
@@ -311,4 +311,125 @@ test "server options defaults" {
     try std.testing.expectEqualStrings("imap.zig ready", opts.greeting_text);
     try std.testing.expectEqual(@as(u64, 0), opts.max_literal_size);
     try std.testing.expectEqual(false, opts.allow_insecure_auth);
+    try std.testing.expectEqual(false, opts.enable_starttls);
+    try std.testing.expect(opts.tls_upgrade_fn == null);
+}
+
+test "server starttls capabilities advertised when enabled" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 CAPABILITY\r\n" ++
+            "A002 STARTTLS\r\n" ++
+            "A003 CAPABILITY\r\n" ++
+            "A004 LOGIN \"user\" \"pass\"\r\n" ++
+            "A005 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.initWithOptions(std.testing.allocator, &store, .{
+        .enable_starttls = true,
+        .allow_insecure_auth = true,
+    });
+    try server.serveTransport(transport.transport());
+
+    // Greeting and CAPABILITY should include STARTTLS
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "STARTTLS") != null);
+    // STARTTLS OK stub (no actual TLS upgrade without callback)
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A002 OK Begin TLS negotiation now") != null);
+}
+
+test "server rejects auth without TLS when insecure auth disabled" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 AUTHENTICATE PLAIN\r\n" ++
+            "A003 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.initWithOptions(std.testing.allocator, &store, .{
+        .enable_starttls = true,
+        .allow_insecure_auth = false,
+    });
+    try server.serveTransport(transport.transport());
+
+    // LOGIN should be rejected
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A001 NO LOGIN requires TLS") != null);
+    // AUTHENTICATE should be rejected
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A002 NO AUTHENTICATE requires TLS") != null);
+    // Greeting should advertise LOGINDISABLED
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "LOGINDISABLED") != null);
+}
+
+test "server fetch envelope" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const user = try store.authenticate("user", "pass");
+    const inbox = user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage(
+        "Subject: Test\r\nFrom: sender@test.com\r\nTo: rcpt@test.com\r\nMessage-ID: <abc>\r\nDate: Mon, 1 Jan 2024 00:00:00 +0000\r\n\r\nBody",
+        &.{},
+        0,
+    );
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 SELECT \"INBOX\"\r\n" ++
+            "A003 FETCH 1 (ENVELOPE)\r\n" ++
+            "A004 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "ENVELOPE (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "\"Test\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "\"sender\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "\"test.com\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "\"<abc>\"") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A003 OK FETCH completed") != null);
+}
+
+test "server fetch body sections" {
+    var store = imap.store.MemStore.init(std.testing.allocator);
+    defer store.deinit();
+    try store.addUser("user", "pass");
+
+    const user = try store.authenticate("user", "pass");
+    const inbox = user.getMailbox("INBOX").?;
+    _ = try inbox.appendMessage(
+        "Subject: Hello\r\nFrom: test@example.com\r\n\r\nThis is the body text",
+        &.{},
+        0,
+    );
+
+    var transport = ScriptTransport.init(
+        std.testing.allocator,
+        "A001 LOGIN \"user\" \"pass\"\r\n" ++
+            "A002 SELECT \"INBOX\"\r\n" ++
+            "A003 FETCH 1 (BODY[HEADER] BODY[TEXT])\r\n" ++
+            "A004 LOGOUT\r\n",
+    );
+    defer transport.deinit();
+
+    var server = imap.server.Server.init(std.testing.allocator, &store);
+    try server.serveTransport(transport.transport());
+
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "BODY[HEADER]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "Subject: Hello") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "BODY[TEXT]") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "This is the body text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, transport.output.items, "A003 OK FETCH completed") != null);
 }

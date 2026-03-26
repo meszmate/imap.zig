@@ -290,6 +290,10 @@ fn handleReplace(ctx: *CommandContext) anyerror!void {
 }
 
 // ---- STARTTLS Extension ----
+// Note: Actual TLS upgrade is handled by the Server.serveConnection loop,
+// which swaps the transport after sending OK. This extension handler is
+// used by the Dispatcher/ExtensionManager path and sends the OK response;
+// the calling code is responsible for performing the actual TLS handshake.
 
 pub const starttls_extension = ServerExtension{
     .name = "STARTTLS",
@@ -300,7 +304,12 @@ pub const starttls_extension = ServerExtension{
 };
 
 fn handleStartTls(ctx: *CommandContext) anyerror!void {
+    if (ctx.session.is_tls) {
+        try ctx.transport.print("{s} BAD already using TLS\r\n", .{ctx.tag});
+        return;
+    }
     try ctx.transport.print("{s} OK Begin TLS negotiation now\r\n", .{ctx.tag});
+    ctx.session.is_tls = true;
 }
 
 // ---- UNSELECT Extension (RFC 3691) ----

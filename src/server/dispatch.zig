@@ -98,6 +98,32 @@ pub const Dispatcher = struct {
         return list.toOwnedSlice(allocator);
     }
 
+    /// Wrap a registered handler with a middleware function.
+    /// The wrapper receives the original handler and returns a new one.
+    pub fn wrap(self: *Dispatcher, name: []const u8, wrapper: *const fn (original: CommandHandlerFn) CommandHandlerFn) void {
+        // Try exact match first
+        if (self.handlers.getEntry(name)) |entry| {
+            entry.value_ptr.* = wrapper(entry.value_ptr.*);
+            return;
+        }
+        // Try case-insensitive
+        var it = self.handlers.iterator();
+        while (it.next()) |entry| {
+            if (std.ascii.eqlIgnoreCase(entry.key_ptr.*, name)) {
+                entry.value_ptr.* = wrapper(entry.value_ptr.*);
+                return;
+            }
+        }
+    }
+
+    /// Wrap ALL registered handlers with a middleware function.
+    pub fn wrapAll(self: *Dispatcher, wrapper: *const fn (original: CommandHandlerFn) CommandHandlerFn) void {
+        var it = self.handlers.iterator();
+        while (it.next()) |entry| {
+            entry.value_ptr.* = wrapper(entry.value_ptr.*);
+        }
+    }
+
     /// Dispatch a command to its registered handler.
     pub fn dispatch(self: *const Dispatcher, ctx: *CommandContext) !void {
         const handler = self.get(ctx.name) orelse {
