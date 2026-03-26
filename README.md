@@ -54,6 +54,12 @@ Implemented now:
 - REPLACE for atomic message replacement
 - Literal+/Literal- marker parsing (RFC 7888)
 - Extended SEARCH criteria: LARGER, SMALLER, HEADER, KEYWORD, UNKEYWORD, date-based filters
+- FETCH ENVELOPE with RFC 2822 address parsing
+- FETCH body section extraction (HEADER, TEXT, HEADER.FIELDS, HEADER.FIELDS.NOT, partial ranges)
+- Graceful server shutdown and connection tracking
+- Middleware integration with dispatcher (wrap, wrapAll)
+- Store helper utilities (pattern matching, number set resolution, INBOX normalization)
+- RFC 2822 address parsing in store adapter
 - Server infrastructure: Options, Dispatcher, specialized Writers (FetchWriter, ListWriter, UpdateWriter, ExpungeWriter, MoveWriter), and Trackers (MailboxTracker, SessionTracker)
 - Client UID command variants: `uidFetch`, `uidStore`, `uidCopy`, `uidMove`, `uidExpunge`, `uidSearch`, `uidSort`
 - Client capability convenience methods: `hasCap`, `supportsIdle`, `supportsMove`, etc.

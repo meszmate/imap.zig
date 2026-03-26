@@ -204,3 +204,29 @@ test "create options and store options" {
     const ns = imap.NamespaceData{};
     try std.testing.expectEqual(@as(usize, 0), ns.personal.len);
 }
+
+test "store helpers pattern matching" {
+    try std.testing.expect(imap.store.helpers.matchPattern("INBOX", "*"));
+    try std.testing.expect(imap.store.helpers.matchPattern("INBOX", "INBOX"));
+    try std.testing.expect(!imap.store.helpers.matchPattern("INBOX", "Sent"));
+    try std.testing.expect(imap.store.helpers.matchPattern("Folder/Sub", "*"));
+    try std.testing.expect(!imap.store.helpers.matchPattern("Folder/Sub", "%"));
+    try std.testing.expect(imap.store.helpers.matchPattern("Folder", "%"));
+}
+
+test "store helpers normalize inbox" {
+    try std.testing.expectEqualStrings("INBOX", imap.store.helpers.normalizeInbox("inbox"));
+    try std.testing.expectEqualStrings("INBOX", imap.store.helpers.normalizeInbox("Inbox"));
+    try std.testing.expectEqualStrings("Sent", imap.store.helpers.normalizeInbox("Sent"));
+}
+
+test "adapter address parsing" {
+    const addr1 = imap.store.adapter.parseAddress("John Doe <john@example.com>");
+    try std.testing.expectEqualStrings("John Doe", addr1.name);
+    try std.testing.expectEqualStrings("john", addr1.mailbox);
+    try std.testing.expectEqualStrings("example.com", addr1.host);
+
+    const addr2 = imap.store.adapter.parseAddress("user@host.com");
+    try std.testing.expectEqualStrings("user", addr2.mailbox);
+    try std.testing.expectEqualStrings("host.com", addr2.host);
+}
